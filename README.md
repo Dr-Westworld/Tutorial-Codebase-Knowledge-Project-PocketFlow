@@ -38,8 +38,6 @@ This is a tutorial project of [Pocket Flow](https://github.com/The-Pocket/Pocket
     # Or, analyze a local directory
     python main.py --dir /path/to/your/codebase --include "*.py" --exclude "*test*"
 
-    # Or, generate a tutorial in Chinese
-    python main.py --repo https://github.com/username/repo --language "Chinese"
     ```
 
     - `--repo` or `--dir` - Specify either a GitHub repo URL or a local directory path (required, mutually exclusive)
