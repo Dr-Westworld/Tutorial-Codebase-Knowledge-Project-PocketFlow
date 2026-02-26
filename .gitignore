@@ -102,7 +102,7 @@ llm_cache.json
 # output/
 
 # uv manage
-pyproject.toml
+# pyproject.toml
 uv.lock
 
 docs/*.pdf
@@ -110,5 +110,28 @@ docs/design-cn.md
 
 docs/*
 
-github_crawler/
-rust_tools/
+github_crawler/target/
+rust_tools/target/
+
+# --- Compiled files ---
+/target/
+
+# --- IDEs and Editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- OS generated files ---
+.DS_Store
+Thumbs.db
+
+# --- Cargo Lock ---
+# For BINARY projects (apps), it's recommended to commit Cargo.lock.
+# For LIBRARY projects, you can ignore it, but keeping it is usually fine.
+# Cargo.lock
+
+# --- Backup and Crash logs ---
+*.bak
+*.rs.bk
+rust-toolchain
