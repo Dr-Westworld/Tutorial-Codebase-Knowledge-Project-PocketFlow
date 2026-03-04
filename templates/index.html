@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Code Tutorial Generator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <div class="logo-section">
+                    <i class="fas fa-book-open"></i>
+                    <h1>Code Tutorial Generator</h1>
+                </div>
+                <p class="subtitle">Transform any codebase into interactive tutorials</p>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Left Panel: Input Form -->
+            <section class="input-section">
+                <div class="form-container">
+                    <h2>Create Tutorial</h2>
+
+                    <!-- Source Selection -->
+                    <div class="source-selector">
+                        <label class="radio-label">
+                            <input type="radio" name="sourceType" value="github" checked>
+                            <span class="radio-custom"></span>
+                            <i class="fab fa-github"></i> GitHub Repository
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="sourceType" value="local">
+                            <span class="radio-custom"></span>
+                            <i class="fas fa-folder"></i> Local Directory
+                        </label>
+                    </div>
+
+                    <!-- GitHub URL Input -->
+                    <div id="githubInput" class="input-group visible">
+                        <label for="repoUrl">GitHub Repository URL</label>
+                        <div class="input-wrapper">
+                            <i class="fas fa-link"></i>
+                            <input type="text" id="repoUrl" placeholder="github.com/username/repo or full URL" name="source">
+                        </div>
+                        <small>Example: github.com/openai/gpt-2</small>
+                    </div>
+
+                    <!-- Local Directory Input -->
+                    <div id="localInput" class="input-group hidden">
+                        <label for="localPath">Local Directory Path</label>
+                        <div class="input-wrapper">
+                            <i class="fas fa-folder-open"></i>
+                            <input type="text" id="localPath" placeholder="/path/to/your/project" name="source">
+                        </div>
+                        <small>Enter the absolute path to your directory</small>
+                    </div>
+
+                    <!-- Include Patterns -->
+                    <div class="input-group">
+                        <label for="includePatterns">Include Patterns <span class="optional">(optional)</span></label>
+                        <div class="input-wrapper">
+                            <i class="fas fa-file-check"></i>
+                            <textarea id="includePatterns" placeholder="*.py, *.js, *.ts, etc." name="include" rows="2"></textarea>
+                        </div>
+                        <small>Comma-separated file patterns to include (leave empty for defaults)</small>
+                    </div>
+
+                    <!-- Exclude Patterns -->
+                    <div class="input-group">
+                        <label for="excludePatterns">Exclude Patterns <span class="optional">(optional)</span></label>
+                        <div class="input-wrapper">
+                            <i class="fas fa-file-slash"></i>
+                            <textarea id="excludePatterns" placeholder="tests/*, node_modules/*, etc." name="exclude" rows="2"></textarea>
+                        </div>
+                        <small>Comma-separated patterns to exclude (leave empty for defaults)</small>
+                    </div>
+
+                    <!-- Max File Size -->
+                    <div class="input-group">
+                        <label for="maxSize">Maximum File Size (bytes)</label>
+                        <div class="input-wrapper">
+                            <i class="fas fa-database"></i>
+                            <input type="number" id="maxSize" name="maxSize" value="100000" min="1000">
+                        </div>
+                        <small>Default: 100KB (100000 bytes)</small>
+                    </div>
+
+                    <!-- Language Selection -->
+                    <div class="input-group">
+                        <label for="language">Tutorial Language</label>
+                        <div class="input-wrapper">
+                            <i class="fas fa-language"></i>
+                            <select id="language" name="language">
+                                <option value="english">English</option>
+                                <!-- <option value="spanish">Spanish</option>
+                                <option value="french">French</option>
+                                <option value="german">German</option>
+                                <option value="chinese">Chinese</option>
+                                <option value="japanese">Japanese</option> -->
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Cache Option -->
+                    <div class="checkbox-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="disableCache" name="disableCache">
+                            <span class="checkbox-custom"></span>
+                            Disable LLM Caching
+                        </label>
+                        <small>Uncheck to use cached LLM responses (faster processing)</small>
+                    </div>
+
+                    <!-- Action Buttons -->
+                    <div class="button-group">
+                        <button id="processBtn" class="btn btn-primary" onclick="processRepository()">
+                            <i class="fas fa-play"></i> Generate Tutorial
+                        </button>
+                        <button class="btn btn-secondary" onclick="clearForm()">
+                            <i class="fas fa-redo"></i> Clear
+                        </button>
+                    </div>
+
+                    <!-- Status Message -->
+                    <div id="statusMessage" class="status-message hidden"></div>
+                    <div id="loadingSpinner" class="loading-spinner hidden">
+                        <div class="spinner"></div>
+                        <p>Processing your tutorial...</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Panel: Tutorials List -->
+            <section class="output-section">
+                <div class="tutorials-container">
+                    <h2>Generated Tutorials</h2>
+                    <div id="tutorialsList" class="tutorials-list">
+                        <div class="empty-state">
+                            <i class="fas fa-inbox"></i>
+                            <p>No tutorials generated yet</p>
+                            <small>Generate a tutorial to see it here</small>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>&copy; 2024 Code Tutorial Generator | Transform your codebase into knowledge</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

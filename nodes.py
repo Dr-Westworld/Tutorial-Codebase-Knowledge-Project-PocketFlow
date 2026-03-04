@@ -3,14 +3,18 @@ import re
 import yaml
 from pocketflow import Node, BatchNode
 # from utils.crawl_github_files import crawl_github_files
-# from utils.crawl_github_files import crawl_github_files
-# from utils.call_llm import call_llm
-import github_crawler
-import rust_tools
+from utils.crawl_github_files import crawl_github_files
+from utils.call_llm import call_llm
+# import github_crawler
+# import rust_tools
 from utils.crawl_local_files import crawl_local_files
 # from utils.crawl_local_files import crawl_local_files
 import dotenv
 dotenv.load_dotenv()
+
+# Performance monitoring
+from utils.performance_tracker import track_performance
+from utils.metrics import MetricsCollector
 
 # Helper to get content for specific file indices
 def get_content_for_indices(files_data, indices):
@@ -53,10 +57,11 @@ class FetchRepo(Node):
             "use_relative_paths": True,
         }
 
+    @track_performance(node_name="FetchRepo")
     def exec(self, prep_res):
         if prep_res["repo_url"]:
             print(f"Crawling repository: {prep_res['repo_url']}...")
-            result = github_crawler.crawl_github_files(
+            result = crawl_github_files(
                 repo_url=prep_res["repo_url"],
                 token=prep_res["token"],
                 include_patterns=prep_res["include_patterns"],
@@ -120,6 +125,7 @@ class IdentifyAbstractions(Node):
             max_abstraction_num,
         )  # Return all parameters
 
+    @track_performance(node_name="IdentifyAbstractions")
     def exec(self, prep_res):
         (
             context,
@@ -178,7 +184,8 @@ Format the output as a YAML list of dictionaries:
     - 5 # path/to/another.js
 # ... up to {max_abstraction_num} abstractions
 ```"""
-        response = rust_tools.call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0))  # Use cache only if enabled and not retrying
+        # response = rust_tools.call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0))  # Use cache only if enabled and not retrying
+        response = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0))  # Use cache only if enabled and not retrying
 
         # --- Validation ---
         yaml_str = response.strip().split("```yaml")[1].split("```")[0].strip()
@@ -291,6 +298,7 @@ class AnalyzeRelationships(Node):
             use_cache,
         )  # Return use_cache
 
+    @track_performance(node_name="AnalyzeRelationships")
     def exec(self, prep_res):
         (
             context,
@@ -349,7 +357,8 @@ relationships:
 
 Now, provide the YAML output:
 """
-        response = rust_tools.call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0)) # Use cache only if enabled and not retrying
+        response = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0)) # Use cache only if enabled and not retrying
+        # response = rust_tools.call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0)) # Use cache only if enabled and not retrying
 
         # --- Validation ---
         yaml_str = response.strip().split("```yaml")[1].split("```")[0].strip()
@@ -456,6 +465,7 @@ class OrderChapters(Node):
             use_cache,
         )  # Return use_cache
 
+    @track_performance(node_name="OrderChapters")
     def exec(self, prep_res):
         (
             abstraction_listing,
@@ -491,7 +501,8 @@ Output the ordered list of abstraction indices, including the name in a comment 
 
 Now, provide the YAML output:
 """
-        response = rust_tools.call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0)) # Use cache only if enabled and not retrying
+        response = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0)) # Use cache only if enabled and not retrying
+        # response = rust_tools.call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0)) # Use cache only if enabled and not retrying
 
         # --- Validation ---
         yaml_str = response.strip().split("```yaml")[1].split("```")[0].strip()
@@ -632,6 +643,7 @@ class WriteChapters(BatchNode):
         print(f"Preparing to write {len(items_to_process)} chapters...")
         return items_to_process  # Iterable for BatchNode
 
+    @track_performance(node_name="WriteChapters")
     def exec(self, item):
         # This runs for each item prepared above
         abstraction_name = item["abstraction_details"][
@@ -728,7 +740,8 @@ Instructions for the chapter (Generate content in {language.capitalize()} unless
 
 Now, directly provide a super beginner-friendly Markdown output (DON'T need ```markdown``` tags):
 """
-        chapter_content = rust_tools.call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0)) # Use cache only if enabled and not retrying
+        # chapter_content = rust_tools.call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0)) # Use cache only if enabled and not retrying
+        chapter_content = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0)) # Use cache only if enabled and not retrying
         # Basic validation/cleanup
         actual_heading = f"# Chapter {chapter_num}: {abstraction_name}"  # Use potentially translated name
         if not chapter_content.strip().startswith(f"# Chapter {chapter_num}"):
@@ -856,6 +869,7 @@ class CombineTutorial(Node):
             "chapter_files": chapter_files,  # List of {"filename": str, "content": str}
         }
 
+    @track_performance(node_name="CombineTutorial")
     def exec(self, prep_res):
         output_path = prep_res["output_path"]
         index_content = prep_res["index_content"]
@@ -883,3 +897,4 @@ class CombineTutorial(Node):
     def post(self, shared, prep_res, exec_res):
         shared["final_output_dir"] = exec_res  # Store the output path
         print(f"\nTutorial generation complete! Files are in: {exec_res}")
+        

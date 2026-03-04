@@ -1,0 +1,25 @@
+{
+  "annotations": {"list": [{"builtIn": 1, "datasource": "-- Grafana --", "enable": true, "hide": true, "iconColor": "rgba(0, 211, 255, 1)", "name": "Annotations & Alerts", "type": "dashboard"}]},
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {"datasource": "Prometheus", "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10}}}, "gridPos": {"h": 8, "w": 24, "x": 0, "y": 0}, "id": 2, "targets": [{"expr": "sum by (function_name, node) (function_execution_time_seconds_sum)", "legendFormat": "{{function_name}} [{{node}}]", "refId": "A"}], "title": "Function Execution Times", "type": "timeseries"},
+    {"datasource": "Prometheus", "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {}}}, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}, "id": 3, "targets": [{"expr": "max(function_memory_usage_bytes) by (function_name) / 1024 / 1024", "instant": true, "legendFormat": "{{function_name}}", "refId": "A"}], "title": "Function Peak Memory (MB)", "type": "stat"},
+    {"datasource": "Prometheus", "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {}}}, "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}, "id": 4, "targets": [{"expr": "avg(function_cpu_percent) by (function_name)", "instant": true, "legendFormat": "{{function_name}}", "refId": "A"}], "title": "Function Average CPU (%)", "type": "stat"},
+    {"datasource": "Prometheus", "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "custom": {"align": "auto", "displayMode": "auto"}}}, "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16}, "id": 5, "options": {"showHeader": true}, "targets": [{"expr": "topk(15, function_execution_time_seconds_sum)", "instant": true, "legendFormat": "{{function_name}}", "refId": "A"}], "title": "Top 15 Functions by Execution Time", "type": "table"}
+  ],
+  "refresh": "10s",
+  "schemaVersion": 27,
+  "style": "dark",
+  "tags": ["pocketflow", "functions"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "PocketFlow - Function Deep Dive",
+  "uid": "pocketflow-functions",
+  "version": 0
+}

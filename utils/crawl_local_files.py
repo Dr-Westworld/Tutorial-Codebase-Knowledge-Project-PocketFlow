@@ -2,7 +2,12 @@ import os
 import fnmatch
 import pathspec
 
+# Performance monitoring
+from utils.performance_tracker import track_performance
+from utils.metrics import MetricsCollector
 
+
+@track_performance(node_name="FetchRepo")
 def crawl_local_files(
     directory,
     include_patterns=None,

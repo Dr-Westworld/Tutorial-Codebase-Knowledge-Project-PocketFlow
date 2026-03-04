@@ -1,0 +1,25 @@
+{
+  "annotations": {"list": [{"builtIn": 1, "datasource": "-- Grafana --", "enable": true, "hide": true, "iconColor": "rgba(0, 211, 255, 1)", "name": "Annotations & Alerts", "type": "dashboard"}]},
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {"datasource": "Prometheus", "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {}}}, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}, "id": 2, "targets": [{"expr": "max by (repo_name) (node_memory_peak_bytes) / sum by (repo_name) (abstractions_identified_total) / 1024 / 1024", "instant": true, "legendFormat": "{{repo_name}}", "refId": "A"}], "title": "Memory per Abstraction (MB)", "type": "stat"},
+    {"datasource": "Prometheus", "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {}}}, "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}, "id": 3, "targets": [{"expr": "sum by (repo_name) (total_tutorial_generation_time_seconds) / sum by (repo_name) (chapters_written_total)", "instant": true, "legendFormat": "{{repo_name}}", "refId": "A"}], "title": "Time per Chapter (seconds)", "type": "stat"},
+    {"datasource": "Prometheus", "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10}}}, "gridPos": {"h": 10, "w": 24, "x": 0, "y": 8}, "id": 4, "targets": [{"expr": "avg(node_cpu_percent) by (repo_name)", "legendFormat": "{{repo_name}}", "refId": "A"}], "title": "CPU Efficiency Trend by Repository", "type": "timeseries"},
+    {"datasource": "Prometheus", "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "custom": {"align": "auto", "displayMode": "auto"}}}, "gridPos": {"h": 8, "w": 24, "x": 0, "y": 18}, "id": 5, "options": {"showHeader": true}, "targets": [{"expr": "topk(10, (total_tutorial_generation_time_seconds / (files_processed_total + 1)))", "instant": true, "legendFormat": "{{repo_name}}", "refId": "A"}], "title": "Time per File (Top 10 Slowest)", "type": "table"}
+  ],
+  "refresh": "10s",
+  "schemaVersion": 27,
+  "style": "dark",
+  "tags": ["pocketflow", "efficiency"],
+  "templating": {"list": []},
+  "time": {"from": "now-24h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "PocketFlow - Resource Efficiency",
+  "uid": "pocketflow-efficiency",
+  "version": 0
+}

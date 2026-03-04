@@ -12,8 +12,12 @@ from dotenv import load_dotenv   # NEW
 # Load environment variables from .env file
 load_dotenv()
 
+# Performance monitoring
+from utils.performance_tracker import track_performance
+from utils.metrics import MetricsCollector
 
 
+@track_performance(node_name="FetchRepo")
 def crawl_github_files(
     repo_url, 
     token=None, 

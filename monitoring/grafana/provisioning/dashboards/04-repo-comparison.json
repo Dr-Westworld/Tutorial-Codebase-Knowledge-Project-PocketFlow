@@ -1,0 +1,25 @@
+{
+  "annotations": {"list": [{"builtIn": 1, "datasource": "-- Grafana --", "enable": true, "hide": true, "iconColor": "rgba(0, 211, 255, 1)", "name": "Annotations & Alerts", "type": "dashboard"}]},
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {"datasource": "Prometheus", "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "custom": {"align": "auto", "displayMode": "auto"}}}, "gridPos": {"h": 12, "w": 24, "x": 0, "y": 0}, "id": 2, "options": {"showHeader": true, "sortBy": []}, "targets": [{"expr": "group by (repo_name) ({ __name__=~\"total_tutorial_generation_time_seconds\" })", "format": "table", "instant": true, "legendFormat": "", "refId": "A"}], "title": "Repository Metrics Summary", "transformations": [{"id": "organize", "options": {"excludeByName": {}, "indexByName": {}, "renameByName": {}}}], "type": "table"},
+    {"datasource": "Prometheus", "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {}}}, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12}, "id": 3, "targets": [{"expr": "total_tutorial_generation_time_seconds", "instant": true, "legendFormat": "{{repo_name}}", "refId": "A"}], "title": "Total Time by Repository", "type": "stat"},
+    {"datasource": "Prometheus", "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {}}}, "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12}, "id": 4, "targets": [{"expr": "max(node_memory_peak_bytes) by (repo_name) / 1024 / 1024 / 1024", "instant": true, "legendFormat": "{{repo_name}}", "refId": "A"}], "title": "Peak Memory by Repository (GB)", "type": "stat"},
+    {"datasource": "Prometheus", "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "bars", "fillOpacity": 100}}}, "gridPos": {"h": 8, "w": 24, "x": 0, "y": 20}, "id": 5, "targets": [{"expr": "sum by (repo_name) (increase(files_processed_total[1h]))", "legendFormat": "{{repo_name}}", "refId": "A"}], "title": "Files Processed by Repository (1h)", "type": "timeseries"}
+  ],
+  "refresh": "10s",
+  "schemaVersion": 27,
+  "style": "dark",
+  "tags": ["pocketflow", "comparison"],
+  "templating": {"list": []},
+  "time": {"from": "now-24h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "PocketFlow - Repository Comparison",
+  "uid": "pocketflow-repos",
+  "version": 0
+}
