@@ -12,6 +12,7 @@ import tempfile
 # Prometheus metrics
 from prometheus_client import make_wsgi_app, REGISTRY
 from utils.metrics import MetricsCollector
+from flow import create_tutorial_flow
 
 # Configuration
 APP_FOLDER = Path(__file__).parent
@@ -116,6 +117,23 @@ def index():
 def metrics():
     """Prometheus metrics endpoint"""
     from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    # region agent log
+    try:
+        import json as _json, time as _time
+        with open("debug-785079.log", "a", encoding="utf-8") as _f:
+            _payload = {
+                "sessionId": "785079",
+                "runId": "initial",
+                "hypothesisId": "H1",
+                "location": "app.py:/metrics",
+                "message": "metrics_endpoint_called",
+                "data": {},
+                "timestamp": int(_time.time() * 1000),
+            }
+            _f.write(_json.dumps(_payload) + "\n")
+    except Exception:
+        pass
+    # endregion
     return generate_latest(REGISTRY), 200, {'Content-Type': CONTENT_TYPE_LATEST}
 
 
@@ -131,43 +149,53 @@ def process_repository():
 
         source_type = data.get('sourceType')  # 'github' or 'local'
 
-        # Build command
-        cmd = ['python', 'main.py']
-
+        # Build shared config similar to main.py
+        repo_url = None
+        local_dir = None
         if source_type == 'github':
             repo_url = data.get('source')
             if not repo_url.startswith('http'):
                 repo_url = f'https://{repo_url}'
-            cmd.extend(['--repo', repo_url])
         else:
             local_path = data.get('source')
             if not os.path.exists(local_path):
                 return jsonify({'error': f'Local path does not exist: {local_path}'}), 400
-            cmd.extend(['--dir', local_path])
+            local_dir = local_path
 
-        # Add optional parameters
+        include_patterns = set(DEFAULT_INCLUDE_PATTERNS)
         if data.get('include'):
-            include_patterns = [p.strip() for p in data['include'].split(',') if p.strip()]
-            cmd.extend(['--include'] + include_patterns)
+            include_patterns = {p.strip() for p in data['include'].split(',') if p.strip()}
 
+        exclude_patterns = set(DEFAULT_EXCLUDE_PATTERNS)
         if data.get('exclude'):
-            exclude_patterns = [p.strip() for p in data['exclude'].split(',') if p.strip()]
-            cmd.extend(['--exclude'] + exclude_patterns)
+            exclude_patterns = {p.strip() for p in data['exclude'].split(',') if p.strip()}
 
-        if data.get('maxSize'):
-            cmd.extend(['--max-size', str(data['maxSize'])])
+        max_size = int(data.get('maxSize') or 100000)
+        language = data.get('language') or 'english'
+        use_cache = not data.get('disableCache', False)
 
-        if data.get('language'):
-            cmd.extend(['--language', data['language']])
+        shared = {
+            "repo_url": repo_url,
+            "local_dir": local_dir,
+            "project_name": None,
+            "github_token": None,
+            "output_dir": "output",
+            "include_patterns": include_patterns,
+            "exclude_patterns": exclude_patterns,
+            "max_file_size": max_size,
+            "language": language,
+            "use_cache": use_cache,
+            "max_abstraction_num": 10,
+            "files": [],
+            "abstractions": [],
+            "relationships": {},
+            "chapter_order": [],
+            "chapters": [],
+            "final_output_dir": None,
+        }
 
-        if data.get('disableCache'):
-            cmd.append('--no-cache')
-
-        # Run the main.py script
-        result = subprocess.run(cmd, cwd=str(APP_FOLDER), capture_output=True, text=True, timeout=300)
-
-        if result.returncode != 0:
-            return jsonify({'error': f'Processing failed: {result.stderr}'}), 500
+        tutorial_flow = create_tutorial_flow()
+        tutorial_flow.run(shared)
 
         # Get the list of tutorials
         tutorials = list_tutorials()
@@ -176,7 +204,7 @@ def process_repository():
             'success': True,
             'message': 'Processing completed successfully',
             'tutorials': tutorials,
-            'output': result.stdout
+            'output': f"Output directory: {shared.get('final_output_dir')}"
         })
 
     except subprocess.TimeoutExpired:

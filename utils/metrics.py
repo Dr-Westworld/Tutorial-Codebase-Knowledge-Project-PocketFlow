@@ -238,6 +238,29 @@ class MetricsCollector:
     @staticmethod
     def record_llm_call(model, use_cache, cache_hit, duration_sec, status='success'):
         """Record LLM API call metrics"""
+        # region agent log
+        try:
+            import json as _json, time as _time, os as _os
+            with open("debug-785079.log", "a", encoding="utf-8") as _f:
+                _payload = {
+                    "sessionId": "785079",
+                    "runId": "initial",
+                    "hypothesisId": "H1",
+                    "location": "utils/metrics.py:record_llm_call",
+                    "message": "llm_metric_recorded",
+                    "data": {
+                        "model": model,
+                        "use_cache": bool(use_cache),
+                        "cache_hit": bool(cache_hit),
+                        "status": status,
+                        "pid": _os.getpid(),
+                    },
+                    "timestamp": int(_time.time() * 1000),
+                }
+                _f.write(_json.dumps(_payload) + "\n")
+        except Exception:
+            pass
+        # endregion
         try:
             llm_api_call_duration_seconds.labels(
                 model=model,
@@ -258,6 +281,28 @@ class MetricsCollector:
     @staticmethod
     def record_file_processed(source, repo_name, status='success'):
         """Record a file processing event"""
+        # region agent log
+        try:
+            import json as _json, time as _time, os as _os
+            with open("debug-785079.log", "a", encoding="utf-8") as _f:
+                _payload = {
+                    "sessionId": "785079",
+                    "runId": "initial",
+                    "hypothesisId": "H1",
+                    "location": "utils/metrics.py:record_file_processed",
+                    "message": "file_processed_metric_recorded",
+                    "data": {
+                        "source": source,
+                        "repo_name": repo_name,
+                        "status": status,
+                        "pid": _os.getpid(),
+                    },
+                    "timestamp": int(_time.time() * 1000),
+                }
+                _f.write(_json.dumps(_payload) + "\n")
+        except Exception:
+            pass
+        # endregion
         try:
             files_processed_total.labels(
                 source=source,
@@ -269,7 +314,7 @@ class MetricsCollector:
 
     @staticmethod
     def record_file_processing_time(source, repo_name, duration_sec):
-        """Record time to process a file"""
+        """Record time to process a file"""   
         try:
             file_processing_duration_seconds.labels(
                 source=source,

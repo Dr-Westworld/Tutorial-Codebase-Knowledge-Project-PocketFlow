@@ -72,6 +72,9 @@ def crawl_local_files(
     total_files = len(all_files)
     processed_files = 0
 
+    # Derive a simple repo_name for metrics (directory basename)
+    repo_name = os.path.basename(os.path.abspath(directory))
+
     for filepath in all_files:
         relpath = os.path.relpath(filepath, directory) if use_relative_paths else filepath
 
@@ -116,11 +119,20 @@ def crawl_local_files(
                 print(f"\033[92mProgress: {processed_files}/{total_files} ({rounded_percentage}%) {relpath} [{status}]\033[0m")
             continue # Skip large files
 
-        # --- File is being processed ---        
+        # --- File is being processed ---
         try:
             with open(filepath, "r", encoding="utf-8-sig") as f:
                 content = f.read()
             files_dict[relpath] = content
+            # Record successful file processed metric
+            try:
+                MetricsCollector.record_file_processed(
+                    source="local",
+                    repo_name=repo_name,
+                    status="success",
+                )
+            except Exception as _e:
+                print(f"Warning: failed to record file_processed metric for {relpath}: {_e}")
         except Exception as e:
             print(f"Warning: Could not read file {filepath}: {e}")
             status = "skipped (read error)"
