@@ -6,20 +6,40 @@ global:
     environment: 'production'
 
 scrape_configs:
+  # Production app - port 5000
+  # Populates: node_execution_time_seconds, llm_api_calls_total,
+  #            function_memory_usage_bytes, files_processed_total,
+  #            abstractions_identified_total, chapters_written_total
   - job_name: 'pocketflow-app'
+    honor_labels: true                      # changed - prevents label collision
     static_configs:
-      # - targets: ['localhost:5000']
       - targets: ['pocketflow-app:5000']
     metrics_path: '/metrics'
     scrape_interval: 10s
-    scrape_timeout: 5s
+    scrape_timeout: 8s                      # changed - was 5s, too tight under load
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  # Research app - port 5001
+  # Populates dashboard 07-research-gaps.json:
+  #   Gap 1 -> async_vs_sync_speedup_ratio
+  #   Gap 2 -> framework_overhead_seconds
+  #   Gap 3 -> memory_divergence_peak_bytes
+  #   Gap 4/5 -> call_tree_function_time_seconds
+  # NOTE: metrics only appear AFTER triggering /api/research/process
+  - job_name: 'pocketflow-research'
+    honor_labels: true                      # changed - added, was missing
+    static_configs:
+      - targets: ['pocketflow-research:5001']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+    scrape_timeout: 8s                      # changed - was missing entirely
     relabel_configs:
       - source_labels: [__address__]
         target_label: instance
 
   - job_name: 'prometheus'
     static_configs:
-      # - targets: ['localhost:9090']
       - targets: ['prometheus:9090']
     scrape_interval: 10s
- 

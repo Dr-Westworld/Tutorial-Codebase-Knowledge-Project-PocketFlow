@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PocketFlow Research — Sync vs Async Comparison</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .research-badge {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            color: white;
+            padding: 0.2rem 0.6rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            margin-left: 0.5rem;
+        }
+        .comparison-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin: 1.5rem 0;
+        }
+        .metric-card {
+            background: #f8fafc;
+            border: 2px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 1.25rem;
+            text-align: center;
+        }
+        .metric-card.highlight {
+            border-color: #6366f1;
+            background: rgba(99,102,241,0.04);
+        }
+        .metric-value {
+            font-size: 2rem;
+            font-weight: 800;
+            color: #1e293b;
+            line-height: 1;
+            margin: 0.5rem 0 0.25rem;
+        }
+        .metric-label {
+            color: #64748b;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+        .speedup-banner {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+            border-radius: 10px;
+            padding: 1.25rem;
+            text-align: center;
+            margin: 1rem 0;
+            display: none;
+        }
+        .speedup-banner.visible { display: block; }
+        .speedup-banner .big { font-size: 2.5rem; font-weight: 900; }
+        .history-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        .history-table th, .history-table td {
+            padding: 0.6rem 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .history-table th { background: #f8fafc; font-weight: 600; color: #475569; }
+        .history-table tr:hover td { background: #f8fafc; }
+        .pill {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+        .pill-green  { background: #d1fae5; color: #065f46; }
+        .pill-orange { background: #fef3c7; color: #92400e; }
+        .pill-blue   { background: #dbeafe; color: #1e40af; }
+        .tabs { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; }
+        .tab-btn {
+            padding: 0.5rem 1.25rem;
+            border: 2px solid #e2e8f0;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+            font-weight: 600;
+            color: #64748b;
+            transition: all 0.2s;
+        }
+        .tab-btn.active {
+            border-color: #6366f1;
+            color: #6366f1;
+            background: rgba(99,102,241,0.05);
+        }
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <header class="header">
+        <div class="header-content">
+            <div class="logo-section">
+                <i class="fas fa-flask"></i>
+                <h1>PocketFlow Research <span class="research-badge">RESEARCH MODE</span></h1>
+            </div>
+            <p class="subtitle">Sync vs Async WriteChapters · Framework Overhead · Memory Divergence</p>
+        </div>
+    </header>
+
+    <main class="main-content">
+
+        <!-- ── Left: Input ── -->
+        <section class="input-section">
+            <div class="form-container">
+                <h2>Run Comparison</h2>
+
+                <div class="source-selector">
+                    <label class="radio-label">
+                        <input type="radio" name="sourceType" value="github" checked>
+                        <span class="radio-custom"></span>
+                        <i class="fab fa-github"></i> GitHub Repo
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="sourceType" value="local">
+                        <span class="radio-custom"></span>
+                        <i class="fas fa-folder"></i> Local Dir
+                    </label>
+                </div>
+
+                <div id="githubInput" class="input-group visible">
+                    <label for="repoUrl">GitHub Repository URL</label>
+                    <div class="input-wrapper">
+                        <i class="fas fa-link"></i>
+                        <input type="text" id="repoUrl" placeholder="github.com/username/repo">
+                    </div>
+                </div>
+
+                <div id="localInput" class="input-group hidden">
+                    <label for="localPath">Local Directory Path</label>
+                    <div class="input-wrapper">
+                        <i class="fas fa-folder-open"></i>
+                        <input type="text" id="localPath" placeholder="/path/to/project">
+                    </div>
+                </div>
+
+                <div class="input-group">
+                    <label for="asyncWorkers">Async Workers (ThreadPoolExecutor)</label>
+                    <div class="input-wrapper">
+                        <i class="fas fa-layer-group"></i>
+                        <input type="number" id="asyncWorkers" value="4" min="1" max="16">
+                    </div>
+                    <small>Controls parallelism for the async WriteChapters run</small>
+                </div>
+
+                <div class="input-group">
+                    <label for="language">Tutorial Language</label>
+                    <div class="input-wrapper">
+                        <i class="fas fa-language"></i>
+                        <select id="language">
+                            <option value="english">English</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="checkbox-group" style="margin-bottom:1rem;">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="runFlatBaseline">
+                        <span class="checkbox-custom"></span>
+                        Run flat baseline (framework overhead measurement)
+                    </label>
+                    <small style="margin-left:2rem;">Runs all 6 operations as plain functions, no PocketFlow wrappers. Adds ~same wall time as a full pipeline run.</small>
+                </div>
+
+                <div class="checkbox-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="disableCache">
+                        <span class="checkbox-custom"></span>
+                        Disable LLM cache (not recommended for research — biases timing)
+                    </label>
+                </div>
+
+                <div class="button-group" style="margin-top:1.5rem;">
+                    <button id="runBtn" class="btn btn-primary" onclick="runComparison()">
+                        <i class="fas fa-play"></i> Run Comparison
+                    </button>
+                    <button class="btn btn-secondary" onclick="loadHistory()">
+                        <i class="fas fa-history"></i> Refresh History
+                    </button>
+                </div>
+
+                <div id="statusMessage" class="status-message hidden"></div>
+                <div id="loadingSpinner" class="loading-spinner hidden">
+                    <div class="spinner"></div>
+                    <p id="loadingText">Running sync pipeline…</p>
+                </div>
+
+                <!-- Live results panel -->
+                <div id="liveResults" style="display:none; margin-top:1.5rem;">
+                    <div class="speedup-banner" id="speedupBanner">
+                        <div>Async was faster by</div>
+                        <div class="big" id="speedupValue">—</div>
+                        <div id="speedupDetails"></div>
+                    </div>
+                    <div class="comparison-grid">
+                        <div class="metric-card">
+                            <div class="metric-label">Sync WriteChapters</div>
+                            <div class="metric-value" id="syncTime">—</div>
+                            <div class="metric-label">seconds</div>
+                        </div>
+                        <div class="metric-card highlight">
+                            <div class="metric-label">Async WriteChapters</div>
+                            <div class="metric-value" id="asyncTime">—</div>
+                            <div class="metric-label">seconds</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Chapters</div>
+                            <div class="metric-value" id="chapterCount">—</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Speedup Ratio</div>
+                            <div class="metric-value" id="speedupRatio">—</div>
+                            <div class="metric-label">sync ÷ async</div>
+                        </div>
+                    </div>
+                    <div id="flatResults" style="display:none; margin-top:1rem;">
+                        <h4 style="color:#475569; font-size:0.9rem; margin-bottom:0.5rem;">Framework Overhead</h4>
+                        <div class="comparison-grid">
+                            <div class="metric-card">
+                                <div class="metric-label">PocketFlow Total</div>
+                                <div class="metric-value" id="pfTotal">—</div>
+                                <div class="metric-label">seconds</div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-label">Flat Baseline Total</div>
+                                <div class="metric-value" id="flatTotal">—</div>
+                                <div class="metric-label">seconds</div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-label">Overhead</div>
+                                <div class="metric-value" id="overheadSec">—</div>
+                                <div class="metric-label">seconds</div>
+                            </div>
+                            <div class="metric-card highlight">
+                                <div class="metric-label">Overhead %</div>
+                                <div class="metric-value" id="overheadPct">—</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ── Right: History ── -->
+        <section class="output-section">
+            <div class="tutorials-container">
+
+                <div class="tabs">
+                    <button class="tab-btn active" onclick="switchTab('history')">
+                        <i class="fas fa-history"></i> Run History
+                    </button>
+                    <button class="tab-btn" onclick="switchTab('tutorials')">
+                        <i class="fas fa-book"></i> Tutorials
+                    </button>
+                </div>
+
+                <div id="historyPanel" class="tab-panel active">
+                    <div id="historyTable">
+                        <p style="color:#94a3b8; text-align:center; padding:2rem;">
+                            No comparison runs yet. Run a comparison to see results here.
+                        </p>
+                    </div>
+                </div>
+
+                <div id="tutorialsPanel" class="tab-panel">
+                    <div id="tutorialsList" class="tutorials-list">
+                        <div class="empty-state">
+                            <i class="fas fa-inbox"></i>
+                            <p>No tutorials generated yet</p>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </section>
+
+    </main>
+
+    <footer class="footer">
+        <p>PocketFlow Research Mode &mdash; Port 5001 &mdash; Production app on Port 5000</p>
+    </footer>
+</div>
+
+<script>
+// ── Tab switching ────────────────────────────────────────────────────────────
+function switchTab(name) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    event.target.classList.add('active');
+    document.getElementById(name + 'Panel').classList.add('active');
+    if (name === 'tutorials') loadTutorials();
+}
+
+// ── Source type toggle ───────────────────────────────────────────────────────
+document.querySelectorAll('input[name="sourceType"]').forEach(r => {
+    r.addEventListener('change', e => {
+        const isGithub = e.target.value === 'github';
+        document.getElementById('githubInput').className = 'input-group ' + (isGithub ? 'visible' : 'hidden');
+        document.getElementById('localInput').className  = 'input-group ' + (isGithub ? 'hidden' : 'visible');
+    });
+});
+
+// ── Run comparison ───────────────────────────────────────────────────────────
+async function runComparison() {
+    const sourceType = document.querySelector('input[name="sourceType"]:checked').value;
+    const source     = sourceType === 'github'
+        ? document.getElementById('repoUrl').value.trim()
+        : document.getElementById('localPath').value.trim();
+
+    if (!source) { showStatus('Please enter a source', 'error'); return; }
+
+    document.getElementById('runBtn').disabled = true;
+    document.getElementById('liveResults').style.display = 'none';
+    document.getElementById('flatResults').style.display = 'none';
+    showLoading(true, 'Running sync pipeline (step 1/3)…');
+
+    // Fake progress messages
+    const messages = [
+        'Running sync pipeline (step 1/3)…',
+        'Sync done — running async pipeline (step 2/3)…',
+        'Almost there — collecting metrics (step 3/3)…',
+    ];
+    let mi = 0;
+    const ticker = setInterval(() => {
+        mi = Math.min(mi + 1, messages.length - 1);
+        document.getElementById('loadingText').textContent = messages[mi];
+    }, 30000);
+
+    try {
+        const resp = await fetch('/api/research/process', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                sourceType,
+                source,
+                asyncMaxWorkers:  parseInt(document.getElementById('asyncWorkers').value) || 4,
+                language:         document.getElementById('language').value,
+                runFlatBaseline:  document.getElementById('runFlatBaseline').checked,
+                disableCache:     document.getElementById('disableCache').checked,
+            }),
+        });
+        const data = await resp.json();
+        clearInterval(ticker);
+
+        if (!resp.ok) throw new Error(data.error || 'Request failed');
+        renderResults(data.comparison);
+        showStatus('Comparison complete!', 'success');
+        loadHistory();
+    } catch (err) {
+        clearInterval(ticker);
+        showStatus('Error: ' + err.message, 'error');
+    } finally {
+        showLoading(false);
+        document.getElementById('runBtn').disabled = false;
+    }
+}
+
+function renderResults(c) {
+    document.getElementById('liveResults').style.display = 'block';
+    document.getElementById('syncTime').textContent    = c.sync.write_chapters_sec.toFixed(1) + 's';
+    document.getElementById('asyncTime').textContent   = c.async.write_chapters_sec.toFixed(1) + 's';
+    document.getElementById('chapterCount').textContent = c.chapter_count;
+
+    if (c.speedup_ratio) {
+        document.getElementById('speedupRatio').textContent = c.speedup_ratio.toFixed(2) + '×';
+        const banner = document.getElementById('speedupBanner');
+        banner.classList.add('visible');
+        document.getElementById('speedupValue').textContent = c.speedup_pct_faster.toFixed(1) + '%';
+        document.getElementById('speedupDetails').textContent =
+            `${c.sync.write_chapters_sec.toFixed(1)}s sync → ${c.async.write_chapters_sec.toFixed(1)}s async`;
+    }
+
+    const flat = c.flat_baseline;
+    if (flat && flat.flat_total_sec) {
+        document.getElementById('flatResults').style.display = 'block';
+        document.getElementById('pfTotal').textContent      = flat.pocketflow_total_sec.toFixed(2) + 's';
+        document.getElementById('flatTotal').textContent    = flat.flat_total_sec.toFixed(2) + 's';
+        document.getElementById('overheadSec').textContent  = flat.total_overhead_sec.toFixed(2) + 's';
+        document.getElementById('overheadPct').textContent  = flat.total_overhead_pct.toFixed(1) + '%';
+    }
+}
+
+// ── History ──────────────────────────────────────────────────────────────────
+async function loadHistory() {
+    const resp = await fetch('/api/research/results');
+    const data = await resp.json();
+    const results = data.results || [];
+
+    if (!results.length) {
+        document.getElementById('historyTable').innerHTML =
+            '<p style="color:#94a3b8;text-align:center;padding:2rem;">No runs yet.</p>';
+        return;
+    }
+
+    const rows = results.map(r => {
+        const speedup = r.speedup_ratio ? `<span class="pill pill-green">${r.speedup_ratio.toFixed(2)}×</span>` : '—';
+        const date    = new Date(r.timestamp * 1000).toLocaleString();
+        return `<tr>
+            <td><b>${r.repo_name}</b><br><small>${date}</small></td>
+            <td>${r.chapter_count} chapters</td>
+            <td>${r.sync.write_chapters_sec.toFixed(1)}s</td>
+            <td>${r.async.write_chapters_sec.toFixed(1)}s</td>
+            <td>${speedup}</td>
+        </tr>`;
+    }).join('');
+
+    document.getElementById('historyTable').innerHTML = `
+        <table class="history-table">
+            <thead><tr>
+                <th>Repository</th><th>Chapters</th>
+                <th>Sync WC</th><th>Async WC</th><th>Speedup</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+        </table>`;
+}
+
+// ── Tutorials tab ────────────────────────────────────────────────────────────
+async function loadTutorials() {
+    const resp = await fetch('/api/tutorials');
+    const data = await resp.json();
+    const tutorials = data.tutorials || [];
+
+    if (!tutorials.length) {
+        document.getElementById('tutorialsList').innerHTML =
+            '<div class="empty-state"><i class="fas fa-inbox"></i><p>No tutorials yet</p></div>';
+        return;
+    }
+
+    document.getElementById('tutorialsList').innerHTML = tutorials.map(t => `
+        <div class="tutorial-card">
+            <div class="tutorial-header">
+                <div class="tutorial-title">
+                    <i class="fas fa-book"></i><h3>${t.display_name}</h3>
+                </div>
+                <span class="tutorial-badge">${t.file_count} files</span>
+            </div>
+            <div class="tutorial-files">
+                ${t.files.map(f => `
+                    <a href="/tutorial/${t.name}/${f.path}" target="_blank" class="file-link">
+                        <i class="fas fa-file-alt"></i><span>${f.display_name}</span>
+                    </a>`).join('')}
+            </div>
+        </div>`).join('');
+}
+
+// ── Utility ──────────────────────────────────────────────────────────────────
+function showStatus(msg, type) {
+    const el = document.getElementById('statusMessage');
+    el.textContent = msg;
+    el.className = `status-message ${type} visible`;
+    setTimeout(() => el.classList.remove('visible'), 6000);
+}
+
+function showLoading(show, msg) {
+    const el = document.getElementById('loadingSpinner');
+    el.className = show ? 'loading-spinner visible' : 'loading-spinner hidden';
+    if (msg) document.getElementById('loadingText').textContent = msg;
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+    loadHistory();
+});
+</script>
+</body>
+</html>

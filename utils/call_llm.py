@@ -138,6 +138,10 @@ def call_llm(prompt: str, use_cache: bool = True) -> str:
         return response_text
 
     except Exception as e:
+        import re as _re, time as _time
+        m = _re.search(r'retry_delay\s*\{\s*seconds:\s*(\d+)', str(e))
+        if m:
+            _time.sleep(int(m.group(1)) + 2)
         logger.exception("LLM call failed")
         # Record failure metrics
         llm_duration = time.perf_counter() - llm_start_time

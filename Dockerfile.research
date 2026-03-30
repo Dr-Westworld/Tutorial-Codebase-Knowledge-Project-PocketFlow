@@ -1,0 +1,34 @@
+FROM python:3.10.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# ── Core app files ────────────────────────────────────────────────────────────
+COPY app.py main.py flow.py nodes.py ./
+COPY utils/ ./utils/
+COPY templates/ ./templates/
+COPY static/ ./static/
+COPY monitoring/ ./monitoring/
+
+# ── Research-specific files ───────────────────────────────────────────────────
+COPY research_app.py research_flow.py flat_baseline.py ./
+
+# Create directories that research_app.py writes to
+RUN mkdir -p output uploads research_results profiling_reports
+
+EXPOSE 5001
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:5001/ || exit 1
+
+CMD ["python", "research_app.py"]

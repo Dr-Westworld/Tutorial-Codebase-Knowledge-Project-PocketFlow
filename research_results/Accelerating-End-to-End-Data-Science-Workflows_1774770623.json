@@ -1,0 +1,19 @@
+{
+  "repo_name": "Accelerating-End-to-End-Data-Science-Workflows",
+  "chapter_count": 6,
+  "async_max_workers": 4,
+  "sync": {
+    "total_pipeline_sec": 136.53,
+    "write_chapters_sec": 93.938,
+    "output_dir": "output/Accelerating-End-to-End-Data-Science-Workflows"
+  },
+  "async": {
+    "total_pipeline_sec": 15.756,
+    "write_chapters_sec": 9.362,
+    "output_dir": "output/Accelerating-End-to-End-Data-Science-Workflows"
+  },
+  "speedup_ratio": 10.034,
+  "speedup_pct_faster": 903.4,
+  "flat_baseline": {},
+  "timestamp": 1774770623.5922494
+}

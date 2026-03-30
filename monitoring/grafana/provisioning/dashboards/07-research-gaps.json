@@ -1,0 +1,532 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+
+    {
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "id": 100,
+      "title": "GAP 1 — Async vs Sync WriteChapters Speedup",
+      "type": "row"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "description": "Speedup ratio = sync_time / async_time per repo. Values >1 = async is faster. Values near 1 = I/O dominates, parallelism buys little.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red",    "value": null},
+              {"color": "yellow", "value": 1.0},
+              {"color": "green",  "value": 1.5}
+            ]
+          },
+          "unit": "short",
+          "decimals": 2,
+          "mappings": []
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 1},
+      "id": 1,
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "expr": "async_vs_sync_speedup_ratio",
+          "instant": true,
+          "legendFormat": "{{repo_name}} ({{chapter_count}} chapters)",
+          "refId": "A"
+        }
+      ],
+      "title": "Async Speedup Ratio (sync ÷ async)",
+      "type": "gauge"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "description": "Side-by-side wall-clock time comparison for sync (sequential BatchNode) and async (ThreadPoolExecutor) WriteChapters runs. Directly answers: how much does parallelism help?",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {},
+          "unit": "s",
+          "decimals": 1
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 1},
+      "id": 2,
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": false
+      },
+      "targets": [
+        {
+          "expr": "sync_write_chapters_time_seconds",
+          "instant": true,
+          "legendFormat": "SYNC — {{repo_name}}",
+          "refId": "A"
+        },
+        {
+          "expr": "async_write_chapters_time_seconds",
+          "instant": true,
+          "legendFormat": "ASYNC — {{repo_name}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Sync vs Async WriteChapters Wall-Clock Time (seconds)",
+      "type": "stat"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "description": "Speedup ratio plotted over time — reveals whether speedup degrades as chapter count grows (API rate-limiting) or improves (larger I/O-wait fraction).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "pointSize": 6,
+            "showPoints": "auto",
+            "spanNulls": false
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 9},
+      "id": 3,
+      "targets": [
+        {
+          "expr": "async_vs_sync_speedup_ratio",
+          "legendFormat": "{{repo_name}} (n={{chapter_count}})",
+          "refId": "A"
+        }
+      ],
+      "title": "Speedup Ratio Over Time (all repos)",
+      "type": "timeseries"
+    },
+
+    {
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 17},
+      "id": 101,
+      "title": "GAP 2 — PocketFlow Framework Overhead",
+      "type": "row"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "description": "Distribution of overhead = PocketFlow total time minus flat-baseline total time for the same repo. A narrow distribution near zero means the framework is negligible. A long right tail indicates retry/wait logic adding cost.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 18},
+      "id": 4,
+      "targets": [
+        {
+          "expr": "rate(framework_overhead_seconds_bucket[1h])",
+          "legendFormat": "{{le}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Framework Overhead Distribution (seconds, histogram)",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "description": "P50, P95, P99 overhead in seconds. P95 > 10s suggests that occasional retries (max_retries=5, wait=20s) are materialising during benchmark runs.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {},
+          "unit": "s",
+          "decimals": 2
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 18},
+      "id": 5,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(framework_overhead_seconds_bucket[1h]))",
+          "instant": true,
+          "legendFormat": "P50 overhead",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(framework_overhead_seconds_bucket[1h]))",
+          "instant": true,
+          "legendFormat": "P95 overhead",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(framework_overhead_seconds_bucket[1h]))",
+          "instant": true,
+          "legendFormat": "P99 overhead",
+          "refId": "C"
+        }
+      ],
+      "title": "Framework Overhead Percentiles (P50 / P95 / P99)",
+      "type": "stat"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "description": "Total PocketFlow pipeline time vs estimated flat-baseline time (PF total minus overhead). The gap between the two bars is the framework tax.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 26},
+      "id": 6,
+      "targets": [
+        {
+          "expr": "total_tutorial_generation_time_seconds",
+          "legendFormat": "PocketFlow total — {{repo_name}}",
+          "refId": "A"
+        },
+        {
+          "expr": "total_tutorial_generation_time_seconds - histogram_quantile(0.50, rate(framework_overhead_seconds_bucket[1h]))",
+          "legendFormat": "Est. flat-baseline — {{repo_name}}",
+          "refId": "B"
+        }
+      ],
+      "title": "PocketFlow Total vs Estimated Flat-Baseline Time",
+      "type": "timeseries"
+    },
+
+    {
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 34},
+      "id": 102,
+      "title": "GAP 3 — tracemalloc vs psutil Memory Divergence",
+      "type": "row"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "description": "Peak divergence (psutil_rss - tracemalloc_current) per function. Large values mean native/C-extension allocations that Python's tracemalloc cannot see. Critical for knowing whether function_memory_usage_bytes is trustworthy.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green",  "value": null},
+              {"color": "yellow", "value": 10485760},
+              {"color": "red",    "value": 52428800}
+            ]
+          },
+          "unit": "bytes",
+          "decimals": 0
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 35},
+      "id": 7,
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "orientation": "auto",
+        "showThresholdLabels": true,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "expr": "memory_divergence_peak_bytes",
+          "instant": true,
+          "legendFormat": "{{function_name}} [{{node}}]",
+          "refId": "A"
+        }
+      ],
+      "title": "Peak tracemalloc vs psutil Divergence per Function (bytes)",
+      "type": "gauge"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "description": "Top 10 functions ranked by peak memory divergence. These are the call sites where tracemalloc most severely underestimates true physical memory — important caveat for the paper's memory measurements.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "custom": {"align": "auto", "displayMode": "color-background"},
+          "unit": "bytes",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green",  "value": null},
+              {"color": "yellow", "value": 10485760},
+              {"color": "red",    "value": 52428800}
+            ]
+          }
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 35},
+      "id": 8,
+      "options": {"showHeader": true},
+      "targets": [
+        {
+          "expr": "topk(10, memory_divergence_peak_bytes)",
+          "instant": true,
+          "legendFormat": "{{function_name}} [{{node}}]",
+          "refId": "A"
+        }
+      ],
+      "title": "Top 10 Functions by Peak Memory Divergence",
+      "type": "table"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "description": "Divergence trend over time for all instrumented functions. A rising slope during WriteChapters indicates progressive memory accumulation not captured by tracemalloc — likely from the LLM response cache growing in memory.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "spanNulls": false
+          },
+          "unit": "bytes"
+        }
+      },
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 43},
+      "id": 9,
+      "targets": [
+        {
+          "expr": "memory_divergence_peak_bytes",
+          "legendFormat": "{{function_name}} [{{node}}]",
+          "refId": "A"
+        }
+      ],
+      "title": "Memory Divergence Trend Over Time (all functions)",
+      "type": "timeseries"
+    },
+
+    {
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 51},
+      "id": 103,
+      "title": "GAP 4 & 5 — Call-Tree Per-Phase & Per-Function Granularity",
+      "type": "row"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "description": "Execution time broken down by phase (prep / exec / post) for every node. Quantifies how much of each node's wall-clock time is orchestration (prep+post) vs actual work (exec). If prep+post > 5% of exec, the framework has measurable overhead at the phase level.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1,
+            "stacking": {"group": "A", "mode": "normal"}
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 52},
+      "id": 10,
+      "targets": [
+        {
+          "expr": "sum by (node_name, phase) (call_tree_function_time_seconds_sum)",
+          "legendFormat": "{{node_name}} :: {{phase}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Per-Node Phase Breakdown — prep / exec / post (stacked)",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "description": "Top 15 individual function+phase combinations by total accumulated execution time. The top entry is the single most expensive call site in the entire pipeline — the primary target for optimisation.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "custom": {"align": "auto", "displayMode": "color-background"},
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green",  "value": null},
+              {"color": "yellow", "value": 10},
+              {"color": "red",    "value": 60}
+            ]
+          }
+        }
+      },
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 61},
+      "id": 11,
+      "options": {"showHeader": true, "sortBy": [{"desc": true, "displayName": "Value"}]},
+      "targets": [
+        {
+          "expr": "topk(15, sum by (function_name, node_name, phase) (call_tree_function_time_seconds_sum))",
+          "instant": true,
+          "legendFormat": "{{node_name}} :: {{function_name}} [{{phase}}]",
+          "refId": "A"
+        }
+      ],
+      "title": "Top 15 Call Sites by Total Time (most expensive line in pipeline)",
+      "type": "table"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "description": "Peak memory per function+phase combination. Cross-reference with the divergence panel (GAP 3) — if a function has both high memory AND high divergence, its reported peak is a lower bound on actual physical usage.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "custom": {"align": "auto", "displayMode": "color-background"},
+          "unit": "bytes",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green",  "value": null},
+              {"color": "yellow", "value": 52428800},
+              {"color": "red",    "value": 209715200}
+            ]
+          }
+        }
+      },
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 61},
+      "id": 12,
+      "options": {"showHeader": true, "sortBy": [{"desc": true, "displayName": "Value"}]},
+      "targets": [
+        {
+          "expr": "topk(15, call_tree_function_memory_bytes)",
+          "instant": true,
+          "legendFormat": "{{node_name}} :: {{function_name}} [{{phase}}]",
+          "refId": "A"
+        }
+      ],
+      "title": "Top 15 Call Sites by Peak Memory",
+      "type": "table"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "description": "Ratio of prep+post time to exec time per node. A ratio near 0 means the framework wrapper cost is negligible. A ratio > 0.1 (10%) is a flag that should be investigated — it may indicate excessive shared-dict serialisation or psutil overhead in the node boundary helpers.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green",  "value": null},
+              {"color": "yellow", "value": 0.05},
+              {"color": "red",    "value": 0.10}
+            ]
+          },
+          "unit": "percentunit",
+          "decimals": 3
+        }
+      },
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 70},
+      "id": 13,
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "orientation": "horizontal",
+        "showThresholdLabels": true,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "expr": "sum by (node_name) (call_tree_function_time_seconds_sum{phase=~'prep|post'}) / sum by (node_name) (call_tree_function_time_seconds_sum{phase='exec'})",
+          "instant": true,
+          "legendFormat": "{{node_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Orchestration Overhead Ratio — (prep+post) ÷ exec per Node",
+      "type": "gauge"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "description": "Full per-phase time series for all nodes and phases. Use this to spot phase-level anomalies over time — e.g., if WriteChapters prep() grows over successive runs it may indicate the chapter_filenames dict construction scaling poorly.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "lineWidth": 1,
+            "spanNulls": false
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 78},
+      "id": 14,
+      "targets": [
+        {
+          "expr": "call_tree_function_time_seconds_sum",
+          "legendFormat": "{{node_name}} :: {{function_name}} [{{phase}}]",
+          "refId": "A"
+        }
+      ],
+      "title": "All Phase Timings Over Time (call-tree granularity)",
+      "type": "timeseries"
+    }
+
+  ],
+
+  "refresh": "10s",
+  "schemaVersion": 27,
+  "style": "dark",
+  "tags": ["pocketflow", "research", "gaps"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "PocketFlow — Research Gaps (Paper Evidence)",
+  "uid": "pocketflow-research-gaps",
+  "version": 0
+}

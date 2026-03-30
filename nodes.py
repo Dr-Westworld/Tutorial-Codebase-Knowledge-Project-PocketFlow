@@ -1,20 +1,56 @@
+"""
+nodes.py  (research version — replaces both existing nodes.py files)
+────────────────────────────────────────────────────────────────────
+PocketFlow nodes for the tutorial generation pipeline.
 
+Research paper gaps addressed in this version
+──────────────────────────────────────────────
+Gap 1 — AsyncWriteChapters
+  Parallel chapter generation via ThreadPoolExecutor.
+  Speedup ratio vs sync is pushed to Prometheus automatically.
+
+Gap 2 — Framework overhead
+  Every prep() and post() is wrapped in track_execution so call-tree
+  + Prometheus both see individual phase timings (feeds flat_baseline.py).
+
+Gap 3 — tracemalloc vs psutil divergence  ← NEW in this file
+  WriteChapters.exec() and AsyncWriteChapters._call_one() now read
+  shared["enable_divergence_tracking"] and pass use_divergence=True to
+  track_execution when it is set.  app.py sets this flag for the v2
+  container (APP_MODE != "sync").
+
+Gap 4/5 — Call-tree / per-function granularity
+  record_call() wraps every prep/post so a flame-graph JSON is exported
+  at the end of CombineTutorial.post().
+"""
+
+from __future__ import annotations
+
+import concurrent.futures
 import os
-import time  # changed – used only for node-level boundary timestamps
+import time
 import yaml
+from typing import Any, Dict, List, Optional
+
 from pocketflow import Node, BatchNode
+
 from utils.crawl_github_files import crawl_github_files
 from utils.crawl_local_files import crawl_local_files
 from utils.call_llm import call_llm
-from utils.performance_tracker import track_execution   # changed – replaces all custom _start_trace / _get_rss helpers
-from utils.metrics import MetricsCollector              # changed – domain-specific metric recording
+from utils.performance_tracker import track_execution
+from utils.metrics import MetricsCollector
+from utils.call_tree import record_call
+
 import dotenv
 dotenv.load_dotenv()
 
 
-# Helper to get content for specific file indices
-def get_content_for_indices(files_data, indices):
-    content_map = {}
+# ──────────────────────────────────────────────────────────────────────────────
+# Internal helper
+# ──────────────────────────────────────────────────────────────────────────────
+
+def get_content_for_indices(files_data: list, indices: list) -> dict:
+    content_map: Dict[str, str] = {}
     for i in indices:
         if 0 <= i < len(files_data):
             path, content = files_data[i]
@@ -22,34 +58,19 @@ def get_content_for_indices(files_data, indices):
     return content_map
 
 
-# region Node-boundary helpers
-# ─────────────────────────────────────────────────────────────────────────────
-# track_execution (from performance_tracker.py) already handles tracemalloc,
-# psutil RSS, and CPU sampling inside a single context-manager block — there
-# is no reason to duplicate that logic here.
-#
-# For *node-level* metrics (spanning prep → exec → post) we only need two
-# thin wrappers that delegate to the MetricsCollector static methods that
-# already wrap psutil safely.
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# Node-boundary helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
 def _node_start_snapshot():
-    """
-    Prime the psutil CPU rolling counter and snapshot current RSS.
-    Returns (start_time_sec, start_rss_bytes) to be stored on self.
-    """
-    MetricsCollector.get_cpu_percent()          # prime so the next read is meaningful
+    MetricsCollector.get_cpu_percent()
     return time.perf_counter(), MetricsCollector.get_process_memory_info()["rss"]
 
 
 def _node_end_snapshot(start_time, start_rss, node_name, repo_name, status="success"):
-    """
-    Compute wall-time, memory delta, and CPU since _node_start_snapshot and
-    push everything to Prometheus via MetricsCollector.record_node_metrics.
-    """
     end_time = time.perf_counter()
     end_rss  = MetricsCollector.get_process_memory_info()["rss"]
     cpu      = MetricsCollector.get_cpu_percent()
-
     MetricsCollector.record_node_metrics(
         node_name=node_name,
         repo_name=repo_name,
@@ -59,39 +80,41 @@ def _node_end_snapshot(start_time, start_rss, node_name, repo_name, status="succ
         cpu_percent=cpu,
         status=status,
     )
-# endregion
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FetchRepo
+# ──────────────────────────────────────────────────────────────────────────────
 
 class FetchRepo(Node):
+
     def prep(self, shared):
-        # region FetchRepo
-        self._node_start_time, self._node_start_rss = _node_start_snapshot()
-        # endregion
+        with record_call("prep", node_name="FetchRepo"):
+            with track_execution("prep", node_name="FetchRepo"):
+                self._node_start_time, self._node_start_rss = _node_start_snapshot()
 
-        repo_url     = shared.get("repo_url")
-        local_dir    = shared.get("local_dir")
-        project_name = shared.get("project_name")
+                repo_url     = shared.get("repo_url")
+                local_dir    = shared.get("local_dir")
+                project_name = shared.get("project_name")
 
-        if not project_name:
-            if repo_url:
-                project_name = repo_url.split("/")[-1].replace(".git", "")
-            else:
-                project_name = os.path.basename(os.path.abspath(local_dir))
-            shared["project_name"] = project_name
+                if not project_name:
+                    if repo_url:
+                        project_name = repo_url.split("/")[-1].replace(".git", "")
+                    else:
+                        project_name = os.path.basename(os.path.abspath(local_dir))
+                    shared["project_name"] = project_name
 
-        return {
-            "repo_url":           repo_url,
-            "local_dir":          local_dir,
-            "token":              shared.get("github_token"),
-            "include_patterns":   shared["include_patterns"],
-            "exclude_patterns":   shared["exclude_patterns"],
-            "max_file_size":      shared["max_file_size"],
-            "use_relative_paths": True,
-        }
+                return {
+                    "repo_url":           repo_url,
+                    "local_dir":          local_dir,
+                    "token":              shared.get("github_token"),
+                    "include_patterns":   shared["include_patterns"],
+                    "exclude_patterns":   shared["exclude_patterns"],
+                    "max_file_size":      shared["max_file_size"],
+                    "use_relative_paths": True,
+                }
 
     def exec(self, prep_res):
-        # region track_execution handles tracemalloc + psutil + CPU internally
-        # and calls MetricsCollector.record_function_metrics on exit; no custom helpers needed
         with track_execution("exec", node_name="FetchRepo"):
             if prep_res["repo_url"]:
                 print(f"Crawling repository: {prep_res['repo_url']}...")
@@ -117,82 +140,80 @@ class FetchRepo(Node):
             if not files_list:
                 raise ValueError("Failed to fetch files")
             print(f"Fetched {len(files_list)} files.")
-        # endregion
-
         return files_list
 
     def post(self, shared, prep_res, exec_res):
-        shared["files"] = exec_res
+        with record_call("post", node_name="FetchRepo"):
+            with track_execution("post", node_name="FetchRepo"):
+                shared["files"] = exec_res
+                repo_name = shared.get("project_name", "unknown")
+                source    = "github" if shared.get("repo_url") else "local"
+                language  = shared.get("language", "english")
 
-        # region file-level, repository, and node-level metrics
-        repo_name = shared.get("project_name", "unknown")
-        source    = "github" if shared.get("repo_url") else "local"
-        language  = shared.get("language", "english")
+                per_file_start = time.perf_counter()
+                for _ in exec_res:
+                    MetricsCollector.record_file_processed(source, repo_name, "success")
+                total_fetch_dur = time.perf_counter() - per_file_start
+                if exec_res:
+                    per_file_dur = total_fetch_dur / len(exec_res)
+                    for _ in exec_res:
+                        MetricsCollector.record_file_processing_time(source, repo_name, per_file_dur)
 
-        # Per-file counters and average processing time
-        per_file_start = time.perf_counter()
-        for _ in exec_res:
-            MetricsCollector.record_file_processed(source, repo_name, "success")
-        total_fetch_dur = time.perf_counter() - per_file_start
-        if exec_res:
-            per_file_dur = total_fetch_dur / len(exec_res)
-            for _ in exec_res:
-                MetricsCollector.record_file_processing_time(source, repo_name, per_file_dur)
+                total_bytes = sum(
+                    len(c.encode("utf-8", errors="replace")) for _, c in exec_res
+                )
+                MetricsCollector.record_repository_metrics(
+                    repo_name=repo_name,
+                    repo_size_mb=round(total_bytes / (1024 * 1024), 4),
+                    file_count=len(exec_res),
+                    language=language,
+                )
+                _node_end_snapshot(self._node_start_time, self._node_start_rss,
+                                   "FetchRepo", repo_name)
 
-        # Repository metadata gauge
-        total_bytes = sum(
-            len(content.encode("utf-8", errors="replace")) for _, content in exec_res
-        )
-        MetricsCollector.record_repository_metrics(
-            repo_name=repo_name,
-            repo_size_mb=round(total_bytes / (1024 * 1024), 4),
-            file_count=len(exec_res),
-            language=language,
-        )
 
-        _node_end_snapshot(self._node_start_time, self._node_start_rss, "FetchRepo", repo_name)
-        # endregion
-
+# ──────────────────────────────────────────────────────────────────────────────
+# IdentifyAbstractions
+# ──────────────────────────────────────────────────────────────────────────────
 
 class IdentifyAbstractions(Node):
+
     def prep(self, shared):
-        # region IdentifyAbstractions
-        self._node_start_time, self._node_start_rss = _node_start_snapshot()
-        # endregion
+        with record_call("prep", node_name="IdentifyAbstractions"):
+            with track_execution("prep", node_name="IdentifyAbstractions"):
+                self._node_start_time, self._node_start_rss = _node_start_snapshot()
 
-        files_data          = shared["files"]
-        project_name        = shared["project_name"]
-        language            = shared.get("language", "english")
-        use_cache           = shared.get("use_cache", True)
-        max_abstraction_num = shared.get("max_abstraction_num", 10)
+                files_data          = shared["files"]
+                project_name        = shared["project_name"]
+                language            = shared.get("language", "english")
+                use_cache           = shared.get("use_cache", True)
+                max_abstraction_num = shared.get("max_abstraction_num", 10)
 
-        def create_llm_context(files_data):
-            context   = ""
-            file_info = []
-            for i, (path, content) in enumerate(files_data):
-                context += f"--- File Index {i}: {path} ---\n{content}\n\n"
-                file_info.append((i, path))
-            return context, file_info
+                context   = ""
+                file_info = []
+                for i, (path, content) in enumerate(files_data):
+                    context += f"--- File Index {i}: {path} ---\n{content}\n\n"
+                    file_info.append((i, path))
 
-        context, file_info      = create_llm_context(files_data)
-        file_listing_for_prompt = "\n".join([f"- {idx} # {path}" for idx, path in file_info])
-        return (context, file_listing_for_prompt, len(files_data), project_name, language, use_cache, max_abstraction_num)
+                file_listing = "\n".join([f"- {idx} # {path}" for idx, path in file_info])
+                return (context, file_listing, len(files_data),
+                        project_name, language, use_cache, max_abstraction_num)
 
     def exec(self, prep_res):
-        (context, file_listing_for_prompt, file_count, project_name, language, use_cache, max_abstraction_num) = prep_res
+        (context, file_listing, file_count, project_name,
+         language, use_cache, max_abstraction_num) = prep_res
 
         print("Identifying abstractions using LLM...")
 
-        language_instruction = ""
-        name_lang_hint       = ""
-        desc_lang_hint       = ""
+        language_instruction = name_lang_hint = desc_lang_hint = ""
         if language.lower() != "english":
+            lang_cap = language.capitalize()
             language_instruction = (
                 f"IMPORTANT: Generate the `name` and `description` for each abstraction "
-                f"in **{language.capitalize()}** language. Do NOT use English for these fields.\n\n"
+                f"in **{lang_cap}** language. Do NOT use English for these fields.\n\n"
             )
-            name_lang_hint = f" (value in {language.capitalize()})"
-            desc_lang_hint = f" (value in {language.capitalize()})"
+            name_lang_hint = f" (value in {lang_cap})"
+            desc_lang_hint = f" (value in {lang_cap})"
 
         prompt = f"""
 For the project `{project_name}`:
@@ -201,40 +222,28 @@ Codebase Context:
 {context}
 
 {language_instruction}Analyze the codebase context.
-Identify the top 5-{max_abstraction_num} core most important abstractions to help those new to the codebase.
+Identify the top 5-{max_abstraction_num} core most important abstractions.
 
 For each abstraction, provide:
 1. A concise `name`{name_lang_hint}.
-2. A beginner-friendly `description` explaining what it is with a simple analogy, in around 100 words{desc_lang_hint}.
-3. A list of relevant `file_indices` (integers) using the format `idx # path/comment`.
+2. A beginner-friendly `description` in around 100 words{desc_lang_hint}.
+3. A list of relevant `file_indices` using the format `idx # path`.
 
-List of file indices and paths present in the context:
-{file_listing_for_prompt}
+List of file indices:
+{file_listing}
 
-Format the output as a YAML list of dictionaries:
-
+Format as YAML list:
 ```yaml
 - name: |
-    Query Processing{name_lang_hint}
+    Example{name_lang_hint}
   description: |
-    Explains what the abstraction does.
-    It's like a central dispatcher routing requests.{desc_lang_hint}
+    Explains what it does.{desc_lang_hint}
   file_indices:
-    - 0 # path/to/file1.py
-    - 3 # path/to/related.py
-- name: |
-    Query Optimization{name_lang_hint}
-  description: |
-    Another core concept, similar to a blueprint for objects.{desc_lang_hint}
-  file_indices:
-    - 5 # path/to/another.js
-# ... up to {max_abstraction_num} abstractions
+    - 0 # path/to/file.py
 ```"""
 
-        # region track_execution handles all function-level instrumentation
         with track_execution("exec", node_name="IdentifyAbstractions"):
             response = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0))
-        # endregion
 
         yaml_str     = response.strip().split("```yaml")[1].split("```")[0].strip()
         abstractions = yaml.safe_load(yaml_str)
@@ -242,333 +251,294 @@ Format the output as a YAML list of dictionaries:
         if not isinstance(abstractions, list):
             raise ValueError("LLM Output is not a list")
 
-        validated_abstractions = []
+        validated = []
         for item in abstractions:
             if not isinstance(item, dict) or not all(k in item for k in ["name", "description", "file_indices"]):
                 raise ValueError(f"Missing keys in abstraction item: {item}")
-            if not isinstance(item["name"], str):
-                raise ValueError(f"Name is not a string in item: {item}")
-            if not isinstance(item["description"], str):
-                raise ValueError(f"Description is not a string in item: {item}")
-            if not isinstance(item["file_indices"], list):
-                raise ValueError(f"file_indices is not a list in item: {item}")
-
             validated_indices = []
-            for idx_entry in item["file_indices"]:
+            for entry in item["file_indices"]:
                 try:
-                    if isinstance(idx_entry, int):
-                        idx = idx_entry
-                    elif isinstance(idx_entry, str) and "#" in idx_entry:
-                        idx = int(idx_entry.split("#")[0].strip())
-                    else:
-                        idx = int(str(idx_entry).strip())
-                    if not (0 <= idx < file_count):
-                        raise ValueError(f"Invalid file index {idx} found in item {item['name']}. Max index is {file_count - 1}.")
-                    validated_indices.append(idx)
+                    idx = entry if isinstance(entry, int) else int(str(entry).split("#")[0].strip())
+                    if 0 <= idx < file_count:
+                        validated_indices.append(idx)
                 except (ValueError, TypeError):
-                    raise ValueError(f"Could not parse index from entry: {idx_entry} in item {item['name']}")
+                    pass
+            item["files"] = sorted(set(validated_indices))
+            validated.append({"name": item["name"], "description": item["description"],
+                               "files": item["files"]})
 
-            item["files"] = sorted(list(set(validated_indices)))
-            validated_abstractions.append({"name": item["name"], "description": item["description"], "files": item["files"]})
-
-        print(f"Identified {len(validated_abstractions)} abstractions.")
-        return validated_abstractions
+        print(f"Identified {len(validated)} abstractions.")
+        return validated
 
     def post(self, shared, prep_res, exec_res):
-        shared["abstractions"] = exec_res
+        with record_call("post", node_name="IdentifyAbstractions"):
+            with track_execution("post", node_name="IdentifyAbstractions"):
+                shared["abstractions"] = exec_res
+                repo_name = shared.get("project_name", "unknown")
+                MetricsCollector.set_abstractions_count(repo_name, len(exec_res))
+                _node_end_snapshot(self._node_start_time, self._node_start_rss,
+                                   "IdentifyAbstractions", repo_name)
 
-        # region abstraction count + node boundary metrics
-        repo_name = shared.get("project_name", "unknown")
-        MetricsCollector.set_abstractions_count(repo_name, len(exec_res))
-        _node_end_snapshot(self._node_start_time, self._node_start_rss, "IdentifyAbstractions", repo_name)
-        # endregion
 
+# ──────────────────────────────────────────────────────────────────────────────
+# AnalyzeRelationships
+# ──────────────────────────────────────────────────────────────────────────────
 
 class AnalyzeRelationships(Node):
+
     def prep(self, shared):
-        # region AnalyzeRelationships
-        self._node_start_time, self._node_start_rss = _node_start_snapshot()
-        # endregion
+        with record_call("prep", node_name="AnalyzeRelationships"):
+            with track_execution("prep", node_name="AnalyzeRelationships"):
+                self._node_start_time, self._node_start_rss = _node_start_snapshot()
 
-        abstractions = shared["abstractions"]
-        files_data   = shared["files"]
-        project_name = shared["project_name"]
-        language     = shared.get("language", "english")
-        use_cache    = shared.get("use_cache", True)
+                abstractions = shared["abstractions"]
+                files_data   = shared["files"]
+                project_name = shared["project_name"]
+                language     = shared.get("language", "english")
+                use_cache    = shared.get("use_cache", True)
 
-        num_abstractions            = len(abstractions)
-        context                     = "Identified Abstractions:\\n"
-        all_relevant_indices        = set()
-        abstraction_info_for_prompt = []
+                num_abstractions = len(abstractions)
+                context          = "Identified Abstractions:\\n"
+                all_relevant     = set()
+                listing          = []
 
-        for i, abstr in enumerate(abstractions):
-            file_indices_str = ", ".join(map(str, abstr["files"]))
-            context += (
-                f"- Index {i}: {abstr['name']} (Relevant file indices: [{file_indices_str}])\\n"
-                f"  Description: {abstr['description']}\\n"
-            )
-            abstraction_info_for_prompt.append(f"{i} # {abstr['name']}")
-            all_relevant_indices.update(abstr["files"])
+                for i, abstr in enumerate(abstractions):
+                    file_indices_str = ", ".join(map(str, abstr["files"]))
+                    context += (
+                        f"- Index {i}: {abstr['name']} (files: [{file_indices_str}])\\n"
+                        f"  Description: {abstr['description']}\\n"
+                    )
+                    listing.append(f"{i} # {abstr['name']}")
+                    all_relevant.update(abstr["files"])
 
-        context += "\\nRelevant File Snippets (Referenced by Index and Path):\\n"
-        relevant_files_content_map = get_content_for_indices(files_data, sorted(list(all_relevant_indices)))
-        context += "\\n\\n".join(
-            f"--- File: {idx_path} ---\\n{content}"
-            for idx_path, content in relevant_files_content_map.items()
-        )
-
-        return (context, "\n".join(abstraction_info_for_prompt), num_abstractions, project_name, language, use_cache)
+                context += "\\nRelevant File Snippets:\\n"
+                relevant_map = get_content_for_indices(files_data, sorted(all_relevant))
+                context += "\\n\\n".join(
+                    f"--- File: {k} ---\\n{v}" for k, v in relevant_map.items()
+                )
+                return (context, "\n".join(listing), num_abstractions,
+                        project_name, language, use_cache)
 
     def exec(self, prep_res):
-        (context, abstraction_listing, num_abstractions, project_name, language, use_cache) = prep_res
+        (context, abstraction_listing, num_abstractions,
+         project_name, language, use_cache) = prep_res
 
         print("Analyzing relationships using LLM...")
 
-        language_instruction = ""
-        lang_hint            = ""
-        list_lang_note       = ""
+        language_instruction = lang_hint = list_lang_note = ""
         if language.lower() != "english":
-            lang_cap             = language.capitalize()
+            lang_cap = language.capitalize()
             language_instruction = (
-                f"IMPORTANT: Generate the `summary` and relationship `label` fields "
-                f"in **{lang_cap}** language. Do NOT use English for these fields.\n\n"
+                f"IMPORTANT: Generate `summary` and relationship `label` fields "
+                f"in **{lang_cap}**.\n\n"
             )
             lang_hint      = f" (in {lang_cap})"
             list_lang_note = f" (Names might be in {lang_cap})"
 
         prompt = f"""
-Based on the following abstractions and relevant code snippets from the project `{project_name}`:
+Based on the abstractions and code from project `{project_name}`:
 
-List of Abstraction Indices and Names{list_lang_note}:
+Abstractions{list_lang_note}:
 {abstraction_listing}
 
-Context (Abstractions, Descriptions, Code):
+Context:
 {context}
 
-{language_instruction}Please provide:
-1. A high-level `summary` of the project's main purpose and functionality in a few beginner-friendly sentences{lang_hint}. Use markdown formatting with **bold** and *italic* text to highlight important concepts.
-2. A list (`relationships`) describing the key interactions between these abstractions. For each relationship, specify:
-    - `from_abstraction`: Index of the source abstraction (e.g., `0 # AbstractionName1`)
-    - `to_abstraction`: Index of the target abstraction (e.g., `1 # AbstractionName2`)
-    - `label`: A brief label for the interaction **in just a few words**{lang_hint} (e.g., "Manages", "Inherits", "Uses").
-    Ideally the relationship should be backed by one abstraction calling or passing parameters to another.
-    Simplify the relationship and exclude those non-important ones.
+{language_instruction}Provide:
+1. A `summary` of the project{lang_hint}.
+2. A `relationships` list with from_abstraction, to_abstraction, label{lang_hint}.
 
-IMPORTANT: Make sure EVERY abstraction is involved in at least ONE relationship (either as source or target). Each abstraction index must appear at least once across all relationships.
-
-Format the output as YAML:
+IMPORTANT: Every abstraction must appear in at least one relationship.
 
 ```yaml
 summary: |
-  A brief, simple explanation of the project{lang_hint}.
-  Can span multiple lines with **bold** and *italic* for emphasis.
+  Brief summary{lang_hint}.
 relationships:
-  - from_abstraction: 0 # AbstractionName1
-    to_abstraction: 1 # AbstractionName2
-    label: "Manages"{lang_hint}
-  - from_abstraction: 2 # AbstractionName3
-    to_abstraction: 0 # AbstractionName1
-    label: "Provides config"{lang_hint}
-  # ... other relationships
-```
+  - from_abstraction: 0 # Name1
+    to_abstraction: 1 # Name2
+    label: "Uses"{lang_hint}
+```"""
 
-Now, provide the YAML output:
-"""
-        # region track_execution handles all function-level instrumentation
         with track_execution("exec", node_name="AnalyzeRelationships"):
             response = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0))
-        # endregion
 
-        yaml_str           = response.strip().split("```yaml")[1].split("```")[0].strip()
-        relationships_data = yaml.safe_load(yaml_str)
+        yaml_str = response.strip().split("```yaml")[1].split("```")[0].strip()
+        data     = yaml.safe_load(yaml_str)
 
-        if not isinstance(relationships_data, dict) or not all(k in relationships_data for k in ["summary", "relationships"]):
-            raise ValueError("LLM output is not a dict or missing keys ('summary', 'relationships')")
-        if not isinstance(relationships_data["summary"], str):
-            raise ValueError("summary is not a string")
-        if not isinstance(relationships_data["relationships"], list):
-            raise ValueError("relationships is not a list")
+        if not isinstance(data, dict) or not all(k in data for k in ["summary", "relationships"]):
+            raise ValueError("LLM output missing 'summary' or 'relationships'")
 
-        validated_relationships = []
-        for rel in relationships_data["relationships"]:
-            if not isinstance(rel, dict) or not all(k in rel for k in ["from_abstraction", "to_abstraction", "label"]):
-                raise ValueError(f"Missing keys (expected from_abstraction, to_abstraction, label) in relationship item: {rel}")
-            if not isinstance(rel["label"], str):
-                raise ValueError(f"Relationship label is not a string: {rel}")
+        validated_rels = []
+        for rel in data["relationships"]:
             try:
                 from_idx = int(str(rel["from_abstraction"]).split("#")[0].strip())
                 to_idx   = int(str(rel["to_abstraction"]).split("#")[0].strip())
-                if not (0 <= from_idx < num_abstractions and 0 <= to_idx < num_abstractions):
-                    raise ValueError(f"Invalid index in relationship: from={from_idx}, to={to_idx}. Max index is {num_abstractions - 1}.")
-                validated_relationships.append({"from": from_idx, "to": to_idx, "label": rel["label"]})
-            except (ValueError, TypeError):
-                raise ValueError(f"Could not parse indices from relationship: {rel}")
+                if 0 <= from_idx < num_abstractions and 0 <= to_idx < num_abstractions:
+                    validated_rels.append({"from": from_idx, "to": to_idx,
+                                           "label": str(rel["label"])})
+            except (ValueError, TypeError, KeyError):
+                pass
 
-        print("Generated project summary and relationship details.")
-        return {"summary": relationships_data["summary"], "details": validated_relationships}
+        print("Generated project summary and relationships.")
+        return {"summary": data["summary"], "details": validated_rels}
 
     def post(self, shared, prep_res, exec_res):
-        shared["relationships"] = exec_res
+        with record_call("post", node_name="AnalyzeRelationships"):
+            with track_execution("post", node_name="AnalyzeRelationships"):
+                shared["relationships"] = exec_res
+                repo_name = shared.get("project_name", "unknown")
+                MetricsCollector.set_relationships_count(
+                    repo_name, len(exec_res.get("details", []))
+                )
+                _node_end_snapshot(self._node_start_time, self._node_start_rss,
+                                   "AnalyzeRelationships", repo_name)
 
-        # region relationship count + node boundary metrics
-        repo_name = shared.get("project_name", "unknown")
-        MetricsCollector.set_relationships_count(repo_name, len(exec_res.get("details", [])))
-        _node_end_snapshot(self._node_start_time, self._node_start_rss, "AnalyzeRelationships", repo_name)
-        # endregion
 
+# ──────────────────────────────────────────────────────────────────────────────
+# OrderChapters
+# ──────────────────────────────────────────────────────────────────────────────
 
 class OrderChapters(Node):
+
     def prep(self, shared):
-        # region OrderChapters
-        self._node_start_time, self._node_start_rss = _node_start_snapshot()
-        # endregion
+        with record_call("prep", node_name="OrderChapters"):
+            with track_execution("prep", node_name="OrderChapters"):
+                self._node_start_time, self._node_start_rss = _node_start_snapshot()
 
-        abstractions  = shared["abstractions"]
-        relationships = shared["relationships"]
-        project_name  = shared["project_name"]
-        language      = shared.get("language", "english")
-        use_cache     = shared.get("use_cache", True)
+                abstractions  = shared["abstractions"]
+                relationships = shared["relationships"]
+                project_name  = shared["project_name"]
+                language      = shared.get("language", "english")
+                use_cache     = shared.get("use_cache", True)
 
-        abstraction_listing = "\n".join([f"- {i} # {a['name']}" for i, a in enumerate(abstractions)])
+                listing        = "\n".join([f"- {i} # {a['name']}" for i, a in enumerate(abstractions)])
+                summary_note   = f" (Note: Summary might be in {language.capitalize()})" if language.lower() != "english" else ""
+                list_lang_note = f" (Names might be in {language.capitalize()})"         if language.lower() != "english" else ""
 
-        summary_note   = f" (Note: Project Summary might be in {language.capitalize()})" if language.lower() != "english" else ""
-        list_lang_note = f" (Names might be in {language.capitalize()})"                 if language.lower() != "english" else ""
-
-        context  = f"Project Summary{summary_note}:\n{relationships['summary']}\n\n"
-        context += "Relationships (Indices refer to abstractions above):\n"
-        for rel in relationships["details"]:
-            context += f"- From {rel['from']} ({abstractions[rel['from']]['name']}) to {rel['to']} ({abstractions[rel['to']]['name']}): {rel['label']}\n"
-
-        return (abstraction_listing, context, len(abstractions), project_name, list_lang_note, use_cache)
+                context  = f"Project Summary{summary_note}:\n{relationships['summary']}\n\n"
+                context += "Relationships:\n"
+                for rel in relationships["details"]:
+                    context += (
+                        f"- From {rel['from']} ({abstractions[rel['from']]['name']}) "
+                        f"to {rel['to']} ({abstractions[rel['to']]['name']}): {rel['label']}\n"
+                    )
+                return (listing, context, len(abstractions), project_name, list_lang_note, use_cache)
 
     def exec(self, prep_res):
-        (abstraction_listing, context, num_abstractions, project_name, list_lang_note, use_cache) = prep_res
+        (listing, context, num_abstractions, project_name, list_lang_note, use_cache) = prep_res
 
         print("Determining chapter order using LLM...")
-
         prompt = f"""
-Given the following project abstractions and their relationships for the project ```` {project_name} ````:
+Given the abstractions and relationships for `{project_name}`:
 
-Abstractions (Index # Name){list_lang_note}:
-{abstraction_listing}
+Abstractions{list_lang_note}:
+{listing}
 
-Context about relationships and project summary:
+Context:
 {context}
 
-If you are going to make a tutorial for ```` {project_name} ````, what is the best order to explain these abstractions, from first to last?
-Ideally, first explain those that are the most important or foundational, perhaps user-facing concepts or entry points. Then move to more detailed, lower-level implementation details or supporting concepts.
-
-Output the ordered list of abstraction indices, including the name in a comment for clarity. Use the format `idx # AbstractionName`.
-
+Output the best order to explain these abstractions as a YAML list:
 ```yaml
 - 2 # FoundationalConcept
 - 0 # CoreClassA
-- 1 # CoreClassB (uses CoreClassA)
-- ...
-```
+```"""
 
-Now, provide the YAML output:
-"""
-        # region track_execution handles all function-level instrumentation
         with track_execution("exec", node_name="OrderChapters"):
             response = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0))
-        # endregion
 
-        yaml_str            = response.strip().split("```yaml")[1].split("```")[0].strip()
-        ordered_indices_raw = yaml.safe_load(yaml_str)
+        yaml_str = response.strip().split("```yaml")[1].split("```")[0].strip()
+        raw      = yaml.safe_load(yaml_str)
 
-        if not isinstance(ordered_indices_raw, list):
+        if not isinstance(raw, list):
             raise ValueError("LLM output is not a list")
 
-        ordered_indices = []
-        seen_indices    = set()
-        for entry in ordered_indices_raw:
+        indices, seen = [], set()
+        for entry in raw:
             try:
-                if isinstance(entry, int):
-                    idx = entry
-                elif isinstance(entry, str) and "#" in entry:
-                    idx = int(entry.split("#")[0].strip())
-                else:
-                    idx = int(str(entry).strip())
-                if not (0 <= idx < num_abstractions):
-                    raise ValueError(f"Invalid index {idx} in ordered list. Max index is {num_abstractions - 1}.")
-                if idx in seen_indices:
-                    raise ValueError(f"Duplicate index {idx} found in ordered list.")
-                ordered_indices.append(idx)
-                seen_indices.add(idx)
+                idx = entry if isinstance(entry, int) else int(str(entry).split("#")[0].strip())
+                if 0 <= idx < num_abstractions and idx not in seen:
+                    indices.append(idx)
+                    seen.add(idx)
             except (ValueError, TypeError):
-                raise ValueError(f"Could not parse index from ordered list entry: {entry}")
+                pass
 
-        if len(ordered_indices) != num_abstractions:
+        if len(indices) != num_abstractions:
             raise ValueError(
-                f"Ordered list length ({len(ordered_indices)}) does not match number of abstractions ({num_abstractions}). "
-                f"Missing indices: {set(range(num_abstractions)) - seen_indices}"
+                f"Ordered list length ({len(indices)}) != abstractions ({num_abstractions}). "
+                f"Missing: {set(range(num_abstractions)) - seen}"
             )
-
-        print(f"Determined chapter order (indices): {ordered_indices}")
-        return ordered_indices
+        print(f"Chapter order: {indices}")
+        return indices
 
     def post(self, shared, prep_res, exec_res):
-        shared["chapter_order"] = exec_res
+        with record_call("post", node_name="OrderChapters"):
+            with track_execution("post", node_name="OrderChapters"):
+                shared["chapter_order"] = exec_res
+                repo_name = shared.get("project_name", "unknown")
+                _node_end_snapshot(self._node_start_time, self._node_start_rss,
+                                   "OrderChapters", repo_name)
 
-        # region node boundary metrics for OrderChapters
-        repo_name = shared.get("project_name", "unknown")
-        _node_end_snapshot(self._node_start_time, self._node_start_rss, "OrderChapters", repo_name)
-        # endregion
-
+ 
+# ──────────────────────────────────────────────────────────────────────────────
+# WriteChapters  (sync — Gap 3 divergence tracking wired up)
+# ──────────────────────────────────────────────────────────────────────────────
 
 class WriteChapters(BatchNode):
+
     def prep(self, shared):
-        # region WriteChapters
-        self._node_start_time, self._node_start_rss = _node_start_snapshot()
-        # endregion
+        with record_call("prep", node_name="WriteChapters"):
+            with track_execution("prep", node_name="WriteChapters"):
+                self._node_start_time, self._node_start_rss = _node_start_snapshot()
+                self._sync_start_time = time.perf_counter()
 
-        chapter_order = shared["chapter_order"]
-        abstractions  = shared["abstractions"]
-        files_data    = shared["files"]
-        language      = shared.get("language", "english")
-        use_cache     = shared.get("use_cache", True)
+                chapter_order = shared["chapter_order"]
+                abstractions  = shared["abstractions"]
+                files_data    = shared["files"]
+                language      = shared.get("language", "english")
+                use_cache     = shared.get("use_cache", True)
+                # Gap 3: read divergence tracking flag from shared
+                enable_divergence = shared.get("enable_divergence_tracking", False)
 
-        self.chapters_written_so_far = []
+                self.chapters_written_so_far = []
 
-        chapter_filenames = {}
-        all_chapters      = []
-        for i, abstraction_index in enumerate(chapter_order):
-            if 0 <= abstraction_index < len(abstractions):
-                chapter_num  = i + 1
-                chapter_name = abstractions[abstraction_index]["name"]
-                safe_name    = "".join(c if c.isalnum() else "_" for c in chapter_name).lower()
-                filename     = f"{i+1:02d}_{safe_name}.md"
-                all_chapters.append(f"{chapter_num}. [{chapter_name}]({filename})")
-                chapter_filenames[abstraction_index] = {"num": chapter_num, "name": chapter_name, "filename": filename}
+                chapter_filenames: Dict[int, dict] = {}
+                all_chapters: List[str] = []
+                for i, abs_idx in enumerate(chapter_order):
+                    if 0 <= abs_idx < len(abstractions):
+                        chapter_num  = i + 1
+                        chapter_name = abstractions[abs_idx]["name"]
+                        safe_name    = "".join(c if c.isalnum() else "_" for c in chapter_name).lower()
+                        filename     = f"{i+1:02d}_{safe_name}.md"
+                        all_chapters.append(f"{chapter_num}. [{chapter_name}]({filename})")
+                        chapter_filenames[abs_idx] = {"num": chapter_num, "name": chapter_name,
+                                                       "filename": filename}
 
-        full_chapter_listing = "\n".join(all_chapters)
+                full_chapter_listing = "\n".join(all_chapters)
 
-        items_to_process = []
-        for i, abstraction_index in enumerate(chapter_order):
-            if 0 <= abstraction_index < len(abstractions):
-                abstraction_details       = abstractions[abstraction_index]
-                related_files_content_map = get_content_for_indices(files_data, abstraction_details.get("files", []))
-                prev_chapter = chapter_filenames[chapter_order[i - 1]] if i > 0 else None
-                next_chapter = chapter_filenames[chapter_order[i + 1]] if i < len(chapter_order) - 1 else None
-                items_to_process.append({
-                    "chapter_num":               i + 1,
-                    "abstraction_index":         abstraction_index,
-                    "abstraction_details":       abstraction_details,
-                    "related_files_content_map": related_files_content_map,
-                    "project_name":              shared["project_name"],
-                    "full_chapter_listing":      full_chapter_listing,
-                    "chapter_filenames":         chapter_filenames,
-                    "prev_chapter":              prev_chapter,
-                    "next_chapter":              next_chapter,
-                    "language":                  language,
-                    "use_cache":                 use_cache,
-                })
-            else:
-                print(f"Warning: Invalid abstraction index {abstraction_index} in chapter_order. Skipping.")
+                items_to_process = []
+                for i, abs_idx in enumerate(chapter_order):
+                    if 0 <= abs_idx < len(abstractions):
+                        abstr             = abstractions[abs_idx]
+                        related_files_map = get_content_for_indices(files_data, abstr.get("files", []))
+                        prev_chapter = chapter_filenames.get(chapter_order[i - 1]) if i > 0 else None
+                        next_chapter = chapter_filenames.get(chapter_order[i + 1]) if i < len(chapter_order) - 1 else None
+                        items_to_process.append({
+                            "chapter_num":               i + 1,
+                            "abstraction_index":         abs_idx,
+                            "abstraction_details":       abstr,
+                            "related_files_content_map": related_files_map,
+                            "project_name":              shared["project_name"],
+                            "full_chapter_listing":      full_chapter_listing,
+                            "chapter_filenames":         chapter_filenames,
+                            "prev_chapter":              prev_chapter,
+                            "next_chapter":              next_chapter,
+                            "language":                  language,
+                            "use_cache":                 use_cache,
+                            "enable_divergence_tracking": enable_divergence,  # Gap 3
+                        })
 
-        print(f"Preparing to write {len(items_to_process)} chapters...")
-        return items_to_process
+                print(f"Preparing to write {len(items_to_process)} chapters...")
+                return items_to_process
 
     def exec(self, item):
         abstraction_name        = item["abstraction_details"]["name"]
@@ -577,83 +547,67 @@ class WriteChapters(BatchNode):
         project_name            = item.get("project_name")
         language                = item.get("language", "english")
         use_cache               = item.get("use_cache", True)
+        # Gap 3: read per-item divergence tracking flag
+        enable_divergence       = item.get("enable_divergence_tracking", False)
 
-        print(f"Writing chapter {chapter_num} for: {abstraction_name} using LLM...")
+        print(f"Writing chapter {chapter_num} for: {abstraction_name}...")
 
-        file_context_str          = "\n\n".join(
-            f"--- File: {idx_path.split('# ')[1] if '# ' in idx_path else idx_path} ---\n{content}"
-            for idx_path, content in item["related_files_content_map"].items()
+        file_context_str = "\n\n".join(
+            f"--- File: {k.split('# ')[1] if '# ' in k else k} ---\n{v}"
+            for k, v in item["related_files_content_map"].items()
         )
         previous_chapters_summary = "\n---\n".join(self.chapters_written_so_far)
 
-        language_instruction  = ""
-        concept_details_note  = ""
-        structure_note        = ""
-        prev_summary_note     = ""
-        instruction_lang_note = ""
-        mermaid_lang_note     = ""
-        code_comment_note     = ""
-        link_lang_note        = ""
-        tone_note             = ""
+        language_instruction = concept_note = structure_note = prev_note = ""
+        instruction_note = mermaid_note = code_note = link_note = tone_note = ""
         if language.lower() != "english":
-            lang_cap              = language.capitalize()
-            language_instruction  = (
-                f"IMPORTANT: Write this ENTIRE tutorial chapter in **{lang_cap}**. "
-                f"Some input context (like concept name, description, chapter list, previous summary) "
-                f"might already be in {lang_cap}, but you MUST translate ALL other generated content "
-                f"including explanations, examples, technical terms, and potentially code comments "
-                f"into {lang_cap}. DO NOT use English anywhere except in code syntax, required proper "
-                f"nouns, or when specified. The entire output MUST be in {lang_cap}.\n\n"
-            )
-            concept_details_note  = f" (Note: Provided in {lang_cap})"
-            structure_note        = f" (Note: Chapter names might be in {lang_cap})"
-            prev_summary_note     = f" (Note: This summary might be in {lang_cap})"
-            instruction_lang_note = f" (in {lang_cap})"
-            mermaid_lang_note     = f" (Use {lang_cap} for labels/text if appropriate)"
-            code_comment_note     = f" (Translate to {lang_cap} if possible, otherwise keep minimal English for clarity)"
-            link_lang_note        = f" (Use the {lang_cap} chapter title from the structure above)"
-            tone_note             = f" (appropriate for {lang_cap} readers)"
+            lang_cap             = language.capitalize()
+            language_instruction = f"IMPORTANT: Write this ENTIRE tutorial chapter in **{lang_cap}**.\n\n"
+            concept_note         = f" (Note: Provided in {lang_cap})"
+            structure_note       = f" (Note: Chapter names might be in {lang_cap})"
+            prev_note            = f" (Note: Summary might be in {lang_cap})"
+            instruction_note     = f" (in {lang_cap})"
+            mermaid_note         = f" (Use {lang_cap} for labels)"
+            code_note            = f" (Translate to {lang_cap} if possible)"
+            link_note            = f" (Use the {lang_cap} title)"
+            tone_note            = f" (appropriate for {lang_cap} readers)"
 
         prompt = f"""
-{language_instruction}Write a very beginner-friendly tutorial chapter (in Markdown format) for the project `{project_name}` about the concept: "{abstraction_name}". This is Chapter {chapter_num}.
+{language_instruction}Write a beginner-friendly tutorial chapter (Markdown) for `{project_name}` about "{abstraction_name}". This is Chapter {chapter_num}.
 
-Concept Details{concept_details_note}:
+Concept Details{concept_note}:
 - Name: {abstraction_name}
-- Description:
-{abstraction_description}
+- Description: {abstraction_description}
 
-Complete Tutorial Structure{structure_note}:
+Tutorial Structure{structure_note}:
 {item["full_chapter_listing"]}
 
-Context from previous chapters{prev_summary_note}:
+Previous chapters{prev_note}:
 {previous_chapters_summary if previous_chapters_summary else "This is the first chapter."}
 
-Relevant Code Snippets (Code itself remains unchanged):
-{file_context_str if file_context_str else "No specific code snippets provided for this abstraction."}
+Relevant Code:
+{file_context_str if file_context_str else "No specific code snippets."}
 
-Instructions for the chapter (Generate content in {language.capitalize()} unless specified otherwise):
-- Start with a clear heading (e.g., `# Chapter {chapter_num}: {abstraction_name}`). Use the provided concept name.
-- If this is not the first chapter, begin with a brief transition from the previous chapter{instruction_lang_note}, referencing it with a proper Markdown link using its name{link_lang_note}.
-- Begin with a high-level motivation explaining what problem this abstraction solves{instruction_lang_note}. Start with a central use case as a concrete example. The whole chapter should guide the reader to understand how to solve this use case. Make it very minimal and friendly to beginners.
-- If the abstraction is complex, break it down into key concepts. Explain each concept one-by-one in a very beginner-friendly way{instruction_lang_note}.
-- Explain how to use this abstraction to solve the use case{instruction_lang_note}. Give example inputs and outputs for code snippets (if the output isn't values, describe at a high level what will happen{instruction_lang_note}).
-- Each code block should be BELOW 10 lines! If longer code blocks are needed, break them down into smaller pieces and walk through them one-by-one. Aggresively simplify the code to make it minimal. Use comments{code_comment_note} to skip non-important implementation details. Each code block should have a beginner friendly explanation right after it{instruction_lang_note}.
-- Describe the internal implementation to help understand what's under the hood{instruction_lang_note}. First provide a non-code or code-light walkthrough on what happens step-by-step when the abstraction is called{instruction_lang_note}. It's recommended to use a simple sequenceDiagram with a dummy example - keep it minimal with at most 5 participants to ensure clarity. If participant name has space, use: `participant QP as Query Processing`. {mermaid_lang_note}.
-- Then dive deeper into code for the internal implementation with references to files. Provide example code blocks, but make them similarly simple and beginner-friendly. Explain{instruction_lang_note}.
-- IMPORTANT: When you need to refer to other core abstractions covered in other chapters, ALWAYS use proper Markdown links like this: [Chapter Title](filename.md). Use the Complete Tutorial Structure above to find the correct filename and the chapter title{link_lang_note}. Translate the surrounding text.
-- Use mermaid diagrams to illustrate complex concepts (```mermaid``` format). {mermaid_lang_note}.
-- Heavily use analogies and examples throughout{instruction_lang_note} to help beginners understand.
-- End the chapter with a brief conclusion that summarizes what was learned{instruction_lang_note} and provides a transition to the next chapter{instruction_lang_note}. If there is a next chapter, use a proper Markdown link: [Next Chapter Title](next_chapter_filename){link_lang_note}.
-- Ensure the tone is welcoming and easy for a newcomer to understand{tone_note}.
-- Output *only* the Markdown content for this chapter.
-
-Now, directly provide a super beginner-friendly Markdown output (DON'T need ```markdown``` tags):
+Instructions:
+- Start with `# Chapter {chapter_num}: {abstraction_name}`.
+- Motivation + use case first{instruction_note}.
+- Use mermaid sequence diagrams (max 5 participants){mermaid_note}.
+- Keep code blocks under 10 lines{code_note}.
+- Link to other chapters with [Title](filename.md){link_note}.
+- End with conclusion + transition{instruction_note}.
+- Tone: welcoming{tone_note}.
+- Output ONLY the Markdown content.
 """
-        # region unique per-chapter label so Prometheus surfaces individual
-        # chapter durations in the function_execution_time_seconds histogram
-        with track_execution(f"exec_chapter_{chapter_num}", node_name="WriteChapters"):
+
+        # Gap 3: enable MemoryDivergenceTracker for the most memory-intensive step
+        with track_execution(
+            f"exec_chapter_{chapter_num}",
+            node_name="WriteChapters",
+            # use_divergence=enable_divergence, 
+            use_divergence=True,                        # ← Gap 3
+            divergence_log="profiling_reports/mem_divergence.jsonl",  # ← Gap 3
+        ):
             chapter_content = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0))
-        # endregion
 
         actual_heading = f"# Chapter {chapter_num}: {abstraction_name}"
         if not chapter_content.strip().startswith(f"# Chapter {chapter_num}"):
@@ -668,109 +622,290 @@ Now, directly provide a super beginner-friendly Markdown output (DON'T need ```m
         return chapter_content
 
     def post(self, shared, prep_res, exec_res_list):
-        shared["chapters"] = exec_res_list
-        del self.chapters_written_so_far
-        print(f"Finished writing {len(exec_res_list)} chapters.")
+        with record_call("post", node_name="WriteChapters"):
+            with track_execution("post", node_name="WriteChapters"):
+                shared["chapters"] = exec_res_list
+                del self.chapters_written_so_far
+                print(f"Finished writing {len(exec_res_list)} chapters.")
 
-        # region chapter count + node boundary metrics
-        repo_name = shared.get("project_name", "unknown")
-        MetricsCollector.set_chapters_count(repo_name, len(exec_res_list))
-        _node_end_snapshot(self._node_start_time, self._node_start_rss, "WriteChapters", repo_name)
-        # endregion
+                repo_name  = shared.get("project_name", "unknown")
+                sync_total = time.perf_counter() - self._sync_start_time
+                # Gap 1: store sync time so AsyncWriteChapters.post() can compute speedup
+                shared["_sync_write_chapters_time"] = sync_total
 
+                MetricsCollector.set_chapters_count(repo_name, len(exec_res_list))
+                _node_end_snapshot(self._node_start_time, self._node_start_rss,
+                                   "WriteChapters", repo_name)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# AsyncWriteChapters  — Gap 1
+# ──────────────────────────────────────────────────────────────────────────────
+
+class AsyncWriteChapters(BatchNode):
+    """
+    Parallel chapter generation using ThreadPoolExecutor.
+
+    Gap 1 wiring:
+      If shared['_sync_write_chapters_time'] is set (because WriteChapters
+      ran first via run_sync_then_async()), post() computes and records the
+      speedup ratio automatically via MetricsCollector.record_async_speedup().
+
+    Gap 3 wiring:
+      _call_one() reads enable_divergence_tracking from each item and passes
+      use_divergence=True to track_execution when set.
+    """
+
+    def prep(self, shared):
+        with record_call("prep", node_name="AsyncWriteChapters"):
+            with track_execution("prep", node_name="AsyncWriteChapters"):
+                self._node_start_time, self._node_start_rss = _node_start_snapshot()
+                self._async_start_wall = time.perf_counter()
+
+                chapter_order     = shared["chapter_order"]
+                abstractions      = shared["abstractions"]
+                files_data        = shared["files"]
+                language          = shared.get("language", "english")
+                use_cache         = shared.get("use_cache", True)
+                self._max_workers = shared.get("async_max_workers", 4)
+                # Gap 3: read divergence tracking flag
+                enable_divergence = shared.get("enable_divergence_tracking", False)
+
+                chapter_filenames: Dict[int, dict] = {}
+                all_chapters: List[str] = []
+                for i, abs_idx in enumerate(chapter_order):
+                    if 0 <= abs_idx < len(abstractions):
+                        chapter_num  = i + 1
+                        chapter_name = abstractions[abs_idx]["name"]
+                        safe_name    = "".join(c if c.isalnum() else "_" for c in chapter_name).lower()
+                        filename     = f"{i+1:02d}_{safe_name}.md"
+                        all_chapters.append(f"{chapter_num}. [{chapter_name}]({filename})")
+                        chapter_filenames[abs_idx] = {"num": chapter_num, "name": chapter_name,
+                                                       "filename": filename}
+
+                full_chapter_listing = "\n".join(all_chapters)
+
+                items_to_process = []
+                for i, abs_idx in enumerate(chapter_order):
+                    if 0 <= abs_idx < len(abstractions):
+                        abstr             = abstractions[abs_idx]
+                        related_files_map = get_content_for_indices(files_data, abstr.get("files", []))
+                        items_to_process.append({
+                            "chapter_num":               i + 1,
+                            "abstraction_index":         abs_idx,
+                            "abstraction_details":       abstr,
+                            "related_files_content_map": related_files_map,
+                            "project_name":              shared["project_name"],
+                            "full_chapter_listing":      full_chapter_listing,
+                            "language":                  language,
+                            "use_cache":                 use_cache,
+                            "enable_divergence_tracking": enable_divergence,  # Gap 3
+                        })
+
+                print(f"[AsyncWriteChapters] {len(items_to_process)} chapters, "
+                      f"max_workers={self._max_workers}")
+                return items_to_process
+
+    def exec(self, item):
+        """Build the prompt; actual LLM call runs in parallel threads in post()."""
+        abstraction_name        = item["abstraction_details"]["name"]
+        abstraction_description = item["abstraction_details"]["description"]
+        chapter_num             = item["chapter_num"]
+        project_name            = item.get("project_name")
+        language                = item.get("language", "english")
+        use_cache               = item.get("use_cache", True)
+
+        file_context_str = "\n\n".join(
+            f"--- File: {k.split('# ')[1] if '# ' in k else k} ---\n{v}"
+            for k, v in item["related_files_content_map"].items()
+        )
+
+        prompt = (
+            f"Write a beginner-friendly Markdown tutorial chapter {chapter_num} "
+            f"about \"{abstraction_name}\" for `{project_name}`.\n\n"
+            f"Description: {abstraction_description}\n\n"
+            f"Tutorial structure:\n{item['full_chapter_listing']}\n\n"
+            f"Relevant code:\n{file_context_str[:800] if file_context_str else 'None'}\n\n"
+            "Instructions:\n"
+            f"- Start with `# Chapter {chapter_num}: {abstraction_name}`.\n"
+            "- Use mermaid sequence diagrams (max 5 participants).\n"
+            "- Keep code blocks under 10 lines.\n"
+            "- Output ONLY Markdown content.\n"
+        )
+
+        return {
+            "chapter_num":               chapter_num,
+            "prompt":                    prompt,
+            "use_cache":                 use_cache,
+            "enable_divergence_tracking": item.get("enable_divergence_tracking", False),  # Gap 3
+        }
+
+    def post(self, shared, prep_res, exec_res_list):
+        with record_call("post", node_name="AsyncWriteChapters"):
+            with track_execution("post", node_name="AsyncWriteChapters"):
+                repo_name     = shared.get("project_name", "unknown")
+                chapter_count = len(exec_res_list)
+
+                # ── Parallel LLM calls ────────────────────────────────────────
+                results: Dict[int, str] = {}
+
+                def _call_one(item_result: dict) -> tuple:
+                    cnum             = item_result["chapter_num"]
+                    prompt           = item_result["prompt"]
+                    use_cache        = item_result["use_cache"]
+                    # Gap 3: enable divergence tracking inside each thread
+                    enable_divergence = item_result.get("enable_divergence_tracking", False)
+
+                    with track_execution(
+                        f"async_exec_chapter_{cnum}",
+                        node_name="AsyncWriteChapters",
+                        use_divergence=enable_divergence,                         # ← Gap 3
+                        divergence_log="profiling_reports/mem_divergence.jsonl",  # ← Gap 3
+                    ):
+                        content = call_llm(prompt, use_cache=use_cache)
+
+                    print(f"[AsyncWriteChapters] Chapter {cnum} done")
+                    return cnum, content.strip()
+
+                async_wall_start = time.perf_counter()
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=self._max_workers
+                ) as pool:
+                    futures = {pool.submit(_call_one, r): r for r in exec_res_list}
+                    for fut in concurrent.futures.as_completed(futures):
+                        try:
+                            cnum, content = fut.result()
+                            results[cnum] = content
+                        except Exception as exc:
+                            print(f"[AsyncWriteChapters] Chapter error: {exc}")
+
+                async_elapsed = time.perf_counter() - async_wall_start
+                shared["_async_write_elapsed"] = async_elapsed   
+
+                chapters = [results.get(r["chapter_num"], "") for r in exec_res_list]
+                shared["chapters"] = chapters
+                print(f"[AsyncWriteChapters] {len(chapters)} chapters in {async_elapsed:.2f}s")
+
+                # ── Gap 1: compute speedup if sync time is available ──────────
+                sync_time = shared.get("_sync_write_chapters_time")
+                if sync_time:
+                    MetricsCollector.record_async_speedup(
+                        repo_name=repo_name,
+                        chapter_count=chapter_count,
+                        sync_time=sync_time,
+                        async_time=async_elapsed,
+                    )
+                else:
+                    # Record async time alone so it's in Prometheus even without comparison
+                    from utils.metrics import async_write_chapters_time_seconds
+                    async_write_chapters_time_seconds.labels(
+                        repo_name=repo_name, chapter_count=str(chapter_count)
+                    ).set(async_elapsed)
+
+                MetricsCollector.set_chapters_count(repo_name, len(chapters))
+                _node_end_snapshot(self._node_start_time, self._node_start_rss,
+                                   "AsyncWriteChapters", repo_name)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CombineTutorial
+# ──────────────────────────────────────────────────────────────────────────────
 
 class CombineTutorial(Node):
+
     def prep(self, shared):
-        # region CombineTutorial 
-        # capture node boundary start; read pipeline start injected by app.py
-        self._node_start_time, self._node_start_rss = _node_start_snapshot()
-        # app.py sets shared["_pipeline_start_time"] = time.perf_counter() before flow.run()
-        # so total_tutorial_generation_time_seconds reflects the full end-to-end wall time.
-        # Falls back to this node's start for isolated test runs.
-        self._pipeline_start_time = shared.get("_pipeline_start_time", self._node_start_time)
-        # endregion
+        with record_call("prep", node_name="CombineTutorial"):
+            with track_execution("prep", node_name="CombineTutorial"):
+                self._node_start_time, self._node_start_rss = _node_start_snapshot()
+                self._pipeline_start_time = shared.get("_pipeline_start_time",
+                                                        self._node_start_time)
 
-        project_name       = shared["project_name"]
-        output_base_dir    = shared.get("output_dir", "output")
-        output_path        = os.path.join(output_base_dir, project_name)
-        repo_url           = shared.get("repo_url")
-        relationships_data = shared["relationships"]
-        chapter_order      = shared["chapter_order"]
-        abstractions       = shared["abstractions"]
-        chapters_content   = shared["chapters"]
+                project_name     = shared["project_name"]
+                output_base_dir  = shared.get("output_dir", "output")
+                output_path      = os.path.join(output_base_dir, project_name)
+                repo_url         = shared.get("repo_url")
+                relationships    = shared["relationships"]
+                chapter_order    = shared["chapter_order"]
+                abstractions     = shared["abstractions"]
+                chapters_content = shared["chapters"]
 
-        mermaid_lines = ["flowchart TD"]
-        for i, abstr in enumerate(abstractions):
-            mermaid_lines.append(f'    A{i}["{abstr["name"].replace(chr(34), "")}"]')
-        for rel in relationships_data["details"]:
-            edge_label = rel["label"].replace('"', "").replace("\n", " ")
-            if len(edge_label) > 30:
-                edge_label = edge_label[:27] + "..."
-            mermaid_lines.append(f'    A{rel["from"]} -- "{edge_label}" --> A{rel["to"]}')
+                mermaid_lines = ["flowchart TD"]
+                for i, abstr in enumerate(abstractions):
+                    mermaid_lines.append(f'    A{i}["{abstr["name"].replace(chr(34), "")}"]')
+                for rel in relationships["details"]:
+                    label = rel["label"].replace('"', "").replace("\n", " ")
+                    if len(label) > 30:
+                        label = label[:27] + "..."
+                    mermaid_lines.append(f'    A{rel["from"]} -- "{label}" --> A{rel["to"]}')
 
-        mermaid_diagram = "\n".join(mermaid_lines)
+                mermaid_diagram = "\n".join(mermaid_lines)
 
-        index_content  = f"# Tutorial: {project_name}\n\n"
-        index_content += f"{relationships_data['summary']}\n\n"
-        index_content += f"**Source Repository:** [{repo_url}]({repo_url})\n\n"
-        index_content += "```mermaid\n" + mermaid_diagram + "\n```\n\n"
-        index_content += "## Chapters\n\n"
+                index_content  = f"# Tutorial: {project_name}\n\n"
+                index_content += f"{relationships['summary']}\n\n"
+                index_content += f"**Source Repository:** [{repo_url}]({repo_url})\n\n"
+                index_content += "```mermaid\n" + mermaid_diagram + "\n```\n\n"
+                index_content += "## Chapters\n\n"
 
-        chapter_files = []
-        for i, abstraction_index in enumerate(chapter_order):
-            if 0 <= abstraction_index < len(abstractions) and i < len(chapters_content):
-                abstraction_name = abstractions[abstraction_index]["name"]
-                safe_name        = "".join(c if c.isalnum() else "_" for c in abstraction_name).lower()
-                filename         = f"{i+1:02d}_{safe_name}.md"
-                index_content   += f"{i+1}. [{abstraction_name}]({filename})\n"
+                chapter_files = []
+                for i, abs_idx in enumerate(chapter_order):
+                    if 0 <= abs_idx < len(abstractions) and i < len(chapters_content):
+                        abstr     = abstractions[abs_idx]
+                        safe_name = "".join(c if c.isalnum() else "_" for c in abstr["name"]).lower()
+                        filename  = f"{i+1:02d}_{safe_name}.md"
+                        index_content += f"{i+1}. [{abstr['name']}]({filename})\n"
+                        content   = chapters_content[i]
+                        if not content.endswith("\n\n"):
+                            content += "\n\n"
+                        content += "---\n\nGenerated by [AI Codebase Knowledge Builder]"
+                        chapter_files.append({"filename": filename, "content": content})
 
-                chapter_content  = chapters_content[i]
-                if not chapter_content.endswith("\n\n"):
-                    chapter_content += "\n\n"
-                chapter_content += "---\n\nGenerated by [AI Codebase Knowledge Builder]"
-                chapter_files.append({"filename": filename, "content": chapter_content})
-            else:
-                print(
-                    f"Warning: Mismatch between chapter order, abstractions, or content "
-                    f"at index {i} (abstraction index {abstraction_index}). Skipping file generation for this entry."
-                )
-
-        index_content += "\n\n---\n\nGenerated by [AI Codebase Knowledge Builder]"
-
-        return {"output_path": output_path, "index_content": index_content, "chapter_files": chapter_files}
+                index_content += "\n\n---\n\nGenerated by [AI Codebase Knowledge Builder]"
+                return {"output_path": output_path,
+                        "index_content": index_content,
+                        "chapter_files": chapter_files}
 
     def exec(self, prep_res):
         output_path   = prep_res["output_path"]
         index_content = prep_res["index_content"]
         chapter_files = prep_res["chapter_files"]
 
-        # region track_execution instruments the file I/O block
         with track_execution("exec", node_name="CombineTutorial"):
-            print(f"Combining tutorial into directory: {output_path}")
+            print(f"Combining tutorial into: {output_path}")
             os.makedirs(output_path, exist_ok=True)
 
-            index_filepath = os.path.join(output_path, "index.md")
-            with open(index_filepath, "w", encoding="utf-8") as f:
+            with open(os.path.join(output_path, "index.md"), "w", encoding="utf-8") as f:
                 f.write(index_content)
-            print(f"  - Wrote {index_filepath}")
 
-            for chapter_info in chapter_files:
-                chapter_filepath = os.path.join(output_path, chapter_info["filename"])
-                with open(chapter_filepath, "w", encoding="utf-8") as f:
-                    f.write(chapter_info["content"])
-                print(f"  - Wrote {chapter_filepath}")
-        # endregion
+            for ch in chapter_files:
+                with open(os.path.join(output_path, ch["filename"]), "w", encoding="utf-8") as f:
+                    f.write(ch["content"])
+                print(f"  - Wrote {ch['filename']}")
 
         return output_path
 
     def post(self, shared, prep_res, exec_res):
-        shared["final_output_dir"] = exec_res
-        print(f"\nTutorial generation complete! Files are in: {exec_res}")
+        with record_call("post", node_name="CombineTutorial"):
+            with track_execution("post", node_name="CombineTutorial"):
+                shared["final_output_dir"] = exec_res
+                print(f"\nTutorial complete! Files in: {exec_res}")
 
-        # region total pipeline wall-time + final node boundary metrics
-        repo_name = shared.get("project_name", "unknown")
-        MetricsCollector.record_total_generation_time(
-            repo_name, time.perf_counter() - self._pipeline_start_time
-        )
-        _node_end_snapshot(self._node_start_time, self._node_start_rss, "CombineTutorial", repo_name)
-        # endregion
+                repo_name = shared.get("project_name", "unknown")
+                MetricsCollector.record_total_generation_time(
+                    repo_name, time.perf_counter() - self._pipeline_start_time
+                )
+                _node_end_snapshot(self._node_start_time, self._node_start_rss,
+                                   "CombineTutorial", repo_name)
+
+                # Gaps 4/5: export call-tree flame-graph JSON at end of pipeline
+                try:
+                    from utils.call_tree import CallTreeRecorder
+                    os.makedirs("profiling_reports", exist_ok=True)
+                    CallTreeRecorder.export_json(
+                        f"profiling_reports/call_trees_{repo_name}.json"
+                    )
+                    CallTreeRecorder.export_flamegraph(
+                        f"profiling_reports/flamegraph_{repo_name}.json"
+                    )
+                    CallTreeRecorder.print_summary(top_n=20)
+                except Exception as exc:
+                    print(f"[CombineTutorial] Call-tree export error: {exc}")

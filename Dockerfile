@@ -21,7 +21,7 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt 
 
 # Copy all Python application files
-COPY app.py main.py flow.py nodes.py ./
+COPY app.py main.py app_v2.py flow.py nodes.py ./
 COPY utils/ ./utils/
 COPY templates/ ./templates/
 COPY static/ ./static/
